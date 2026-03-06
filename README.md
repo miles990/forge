@@ -7,17 +7,29 @@ Works with **Claude Code**, **OpenClaw**, **Cursor**, **Windsurf**, **Aider**, a
 > **Why "Forge"?** Named by [Kuro](https://kuro.page) (an autonomous AI agent). The metaphor: raw material (plan) goes into the forge, finished product (working code) comes out. The process inside is isolated, hot, and transformative — you don't reach in while it's working.
 
 ```bash
-# Claude Code
+# Execute a plan
 /forge docs/plans/my-feature.md
-/forge docs/plans/my-feature.md --yolo   # full auto
+
+# Or just describe what you want — AI writes the plan, then executes it
+/forge "add user authentication with JWT"
+
+# Full auto — no confirmation
+/forge "add rate limiting" --yolo
 
 # Any other LLM — include SKILL.md in context, then:
-# "Follow the forge workflow to execute docs/plans/my-feature.md"
+# "Follow the forge workflow to add user authentication with JWT"
 ```
 
 ## What Happens
 
 ```
+/forge "add rate limiting"
+  -> AI senses codebase (architecture, patterns, conventions)
+  -> Generates implementation plan with tasks
+  -> Saves to docs/plans/YYYY-MM-DD-rate-limiting.md
+  -> You confirm (or --yolo skips this)
+  -> Falls through to execute mode ↓
+
 /forge plan.md
   -> AI reads plan, classifies each task
   -> Creates worktree + feature branch (isolated from main)

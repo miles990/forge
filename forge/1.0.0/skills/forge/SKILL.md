@@ -35,8 +35,20 @@ What yolo mode removes: the classification table confirmation step. Forge decide
 
 ## The Flow
 
+**Two entry points:**
+
 ```
-Plan file
+/forge plan.md                → Execute mode (plan file exists)
+/forge "add authentication"   → Plan mode (natural language → generates plan → executes)
+```
+
+Detection: argument ends with `.md` and file exists → Execute mode. Otherwise → Plan mode.
+
+```
+Input (plan file OR natural language description)
+  |
+  v
+[P. PLAN]     (Plan mode only) Sense codebase → generate plan → save → confirm with user
   |
   v
 [0. SENSE]    Detect project environment — language, build/test commands, agents, conventions
@@ -63,6 +75,69 @@ Plan file
   v
 [6. PUSH]     Push to trigger CI/CD
 ```
+
+---
+
+## Phase P: Plan Generation (Plan mode only)
+
+Triggered when the argument is natural language instead of a `.md` file path.
+
+### Step 1: Understand the request
+
+Parse the user's description. Identify:
+- **What** they want (feature, fix, refactor, migration, etc.)
+- **Scope** — is this a single-file change or cross-cutting?
+- **Constraints** — any specific requirements mentioned?
+
+### Step 2: Sense the codebase
+
+Before writing the plan, understand the project:
+
+```
+1. Read project config        → package.json, CLAUDE.md, README, etc.
+2. Understand architecture    → directory structure, key modules, entry points
+3. Find relevant code         → grep/glob for related files, read them
+4. Check existing tests       → test patterns, frameworks, coverage
+5. Check existing patterns    → naming conventions, error handling, similar features
+```
+
+### Step 3: Generate the plan
+
+Write a structured plan with tasks. Each task should specify:
+- **Files** — exact paths to create or modify
+- **What to do** — specific changes, not vague descriptions
+- **Dependencies** — which tasks depend on which
+- **Tests** — what tests to write or update
+
+```markdown
+# [Feature Name] Implementation Plan
+
+**Goal:** [One sentence]
+**Architecture:** [2-3 sentences about approach]
+
+### Task 1: [Component Name]
+**Files:** Create `src/path/file.ts`, Modify `src/path/existing.ts`
+[Detailed description of what to implement]
+
+### Task 2: [Tests]
+**Files:** Create `tests/path/file.test.ts`
+**Depends on:** Task 1
+[Test cases to cover]
+```
+
+### Step 4: Save and confirm
+
+```bash
+# Save to docs/plans/ with timestamp
+PLAN_FILE="docs/plans/$(date +%Y-%m-%d)-<feature-name>.md"
+mkdir -p docs/plans
+```
+
+**Normal mode:** Present the generated plan to user. Wait for approval or edits before proceeding.
+
+**Yolo mode:** Save the plan, log it, and proceed directly to Phase 0.
+
+After confirmation, the plan file feeds into the standard forge flow (Phase 0 → 1 → 2 → 3 → 4 → 5 → 6).
 
 ---
 
