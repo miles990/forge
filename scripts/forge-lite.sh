@@ -108,17 +108,25 @@ check_file_overlap() {
 
   for i in $(seq 1 $FORGE_SLOTS); do
     local slot="${base_dir}-${i}"
-    [ -f "$slot/.forge-files" ] || continue
     [ -f "$slot/.forge-in-use" ] || continue
 
     local busy_branch
     busy_branch=$(cat "$slot/.forge-in-use" 2>/dev/null)
 
-    # Check each declared file against the busy slot's file list
+    # Combine ACTUAL modified files (git diff) + declared files (planned work)
+    # This catches both: files already changed + files not yet changed
+    local busy_files
+    busy_files=$(git -C "$slot" diff --name-only main 2>/dev/null || true)
+    if [ -f "$slot/.forge-files" ]; then
+      busy_files=$(printf '%s\n%s' "$busy_files" "$(cat "$slot/.forge-files")" | sort -u)
+    fi
+    [ -z "$busy_files" ] && continue
+
+    # Check each of my files against the busy slot's combined file list
     local my_file
     for my_file in $(echo "$my_files" | tr ',' '\n'); do
       [ -z "$my_file" ] && continue
-      if grep -qxF "$my_file" "$slot/.forge-files" 2>/dev/null; then
+      if echo "$busy_files" | grep -qxF "$my_file" 2>/dev/null; then
         echo "[overlap] File '$my_file' conflicts with slot $i ($busy_branch)" >&2
         echo "$my_file"
         return 0
