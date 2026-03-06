@@ -159,7 +159,7 @@ Forge is designed for any LLM that can read files and execute shell commands. De
 
 | Capability | Check | Impact on execution |
 |------------|-------|---------------------|
-| **Subagent spawn** | Can you dispatch independent AI agents? (e.g., Claude Code `Agent` tool, Cursor background agents) | Yes → Parallel + Subagent modes available. No → all tasks run sequentially as Direct. |
+| **Subagent spawn** | Can you dispatch independent AI agents? (e.g., Claude Code `Agent` tool, Cursor Subagents, Windsurf Cascade, Copilot CLI `/fleet`, Cline subagent tool, Roo Code Boomerang Tasks) | Yes → Parallel + Subagent modes available. No → all tasks run sequentially as Direct. |
 | **Shell execution** | Can you run shell commands? | Yes → full workflow. No → forge cannot run (needs git, build, test). |
 | **File read/write** | Can you read and edit files? | Required for all modes. |
 | **Worktree support** | Can you `cd` into another directory and work there? | Yes → full isolation. No → use branch-only isolation (`git checkout -b`). |
