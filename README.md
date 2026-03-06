@@ -6,6 +6,9 @@ One command. AI reads your plan, classifies tasks, isolates in a worktree, execu
 
 ```bash
 /forge docs/plans/my-feature.md
+
+# Full auto — no confirmation, just go
+/forge docs/plans/my-feature.md --yolo
 ```
 
 ## What Happens

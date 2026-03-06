@@ -10,6 +10,21 @@ Isolated, high-quality, high-efficiency plan execution.
 
 **Invoke:** `/forge path/to/plan.md`
 
+## Modes
+
+| Mode | Invoke | Behavior |
+|------|--------|----------|
+| **Normal** (default) | `/forge plan.md` | Present classification table → wait for user confirmation → execute |
+| **Yolo** | `/forge plan.md --yolo` | No confirmation. Sense → Analyze → Execute → Verify → Merge → Push. Fully autonomous. |
+
+**Yolo mode** skips the confirmation checkpoint but keeps all safety nets:
+- Worktree isolation still applies
+- Verification gates still enforce (zero tolerance)
+- Rollback still triggers on failure
+- Agent pause/resume still runs
+
+What yolo mode removes: the classification table confirmation step. Forge decides everything — classification, execution order, merge — and only stops if verification fails.
+
 ## Three Pillars
 
 | Pillar | How |
@@ -188,7 +203,9 @@ Worktree: ../project-dev (feature/my-feature)
 Proceed? (y/n)
 ```
 
-**User confirms or overrides before proceeding.**
+**Normal mode:** User confirms or overrides before proceeding.
+
+**Yolo mode:** Log the classification table for traceability, then proceed immediately without waiting.
 
 ---
 
