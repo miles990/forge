@@ -40,6 +40,48 @@ Works with **Claude Code**, **OpenClaw**, **Cursor**, **Windsurf**, **Aider**, a
 
 You confirm the classification table. Everything else is automated.
 
+## Modes
+
+Forge has two dimensions: **input** (plan file vs natural language) and **confirmation** (normal vs yolo).
+
+### Execute mode — run an existing plan
+
+You write the plan (or edit an AI-generated one), then forge executes it.
+
+```bash
+/forge docs/plans/my-feature.md
+```
+
+Forge reads the plan, classifies tasks, shows you the classification table, and waits for confirmation before executing.
+
+### Plan mode — describe what you want
+
+No plan file? Describe what you want in natural language. Forge senses the codebase, generates a structured plan, saves it to `docs/plans/`, and asks you to confirm before executing.
+
+```bash
+/forge "add rate limiting middleware with per-user quotas"
+```
+
+The generated plan is a real file you can edit, version control, and re-run. If the AI misunderstands your intent, fix the plan and re-run — no code was written yet.
+
+### Yolo mode — full auto, no confirmation
+
+Append `--yolo` to skip all confirmation steps. Forge decides everything — plan generation, task classification, execution order — and only stops if verification fails.
+
+```bash
+# Plan + execute, fully autonomous
+/forge "add WebSocket support for real-time updates" --yolo
+
+# Execute existing plan, no confirmation
+/forge docs/plans/my-feature.md --yolo
+```
+
+Yolo mode keeps all safety nets (worktree isolation, verification gates, rollback on failure). What it removes: the pause where you review and confirm.
+
+**When to use yolo:** Well-scoped features with good test coverage. You trust the AI's judgment and want to walk away.
+
+**When NOT to use yolo with plan mode:** High-stakes changes where a misinterpreted intent would produce "correct code that does the wrong thing." Use normal mode so you can review the generated plan before execution.
+
 ## Three Pillars
 
 | | What | Why |
@@ -169,13 +211,7 @@ Modify `src/utils.js` — add `reverse(str)` that returns the string reversed.
 Modify `tests/run.js` — test reverse with normal, empty, palindrome, single char inputs.
 ```
 
-### 2. Run forge
-
-```bash
-/forge docs/plans/my-feature.md
-```
-
-### 3. Review the classification
+### 2. Review the classification
 
 Forge analyzes each task and presents a classification table:
 
