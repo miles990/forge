@@ -21,7 +21,6 @@ Isolated, high-quality, high-efficiency plan execution.
 - Worktree isolation still applies
 - Verification gates still enforce (zero tolerance)
 - Rollback still triggers on failure
-- Agent pause/resume still runs
 
 What yolo mode removes: the classification table confirmation step. Forge decides everything — classification, execution order, merge — and only stops if verification fails.
 
@@ -72,7 +71,7 @@ Input (plan file OR natural language description)
 [4. VERIFY]   Run detected build + typecheck + test commands (zero tolerance)
   |
   v
-[5. MERGE]    Safe merge to main — pause agents, merge, verify, resume
+[5. MERGE]    Safe merge to main — merge, verify, clean up
   |
   v
 [6. PUSH]     Push to trigger CI/CD
@@ -191,41 +190,18 @@ Capability profile:
 | Existing worktrees | `git worktree list` | Avoid name conflicts |
 | Stale forge worktrees | `git worktree list \| grep -- '-dev'` | Prompt user to clean up before creating new one |
 
-### Agent / Automation Detection
+### Automation Awareness
 
 Check for anything that reacts to file changes or git events on main:
 
-| Agent type | Detection | Implication |
-|------------|-----------|-------------|
-| HTTP API agent (Kuro, custom) | `curl -sf "${AGENT_URL:-http://localhost:3001}/status"` or `curl -sf "${AGENT_URL:-http://localhost:3001}/health"` | Pause before merge, resume after |
-| File watcher / auto-commit | `ps aux \| grep -i "fswatch\|watchman\|nodemon\|chokidar"` or `launchctl list \| grep agent` | Worktree mandatory |
+| Automation type | Detection | Implication |
+|-----------------|-----------|-------------|
+| File watcher / auto-commit | `ps aux \| grep -i "fswatch\|watchman\|nodemon\|chokidar"` | Worktree mandatory |
 | Git hooks (post-commit, pre-push) | Check `.git/hooks/` and `.husky/` | Be aware of side effects |
 | CI on push | `.github/workflows/`, `.gitlab-ci.yml`, `Jenkinsfile` | Push triggers CI — verify before push |
 | Other AI agents | `ps aux \| grep -i "cursor\|copilot\|aider\|continue"` | Worktree mandatory to avoid conflicts |
 
-**Rule:** If any automation is detected that reacts to file changes on main → worktree is mandatory regardless of task count.
-
-### Multi-Agent Discovery
-
-To build `$DETECTED_AGENTS` (list of agent URLs to pause/resume during merge):
-
-```bash
-# 1. Check explicit env var
-if [ -n "$AGENT_URL" ]; then AGENTS+=("$AGENT_URL"); fi
-
-# 2. Scan common ports for HTTP API agents
-for PORT in 3001 3002 3003 8001 8080; do
-  if curl -sf "http://localhost:$PORT/health" >/dev/null 2>&1; then
-    AGENTS+=("http://localhost:$PORT")
-  fi
-done
-
-# 3. Check project config for agent URLs
-# Look in: .env, .env.local, docker-compose.yml, agent-compose.yaml
-grep -h 'AGENT_URL\|agent.*url\|localhost:[0-9]' .env* 2>/dev/null
-```
-
-Store all discovered agents as `$DETECTED_AGENTS`. Merge phase iterates over all of them.
+**Rule:** If any automation is detected that reacts to file changes on main → worktree is mandatory regardless of task count. Worktree isolation is sufficient — no need to pause/resume external processes.
 
 ---
 
@@ -316,7 +292,7 @@ git worktree add "$WORKTREE_DIR" -b "$BRANCH"
 - 1-2 tasks only
 - All Direct classification
 - All create new files (no modifications)
-- No agents or automation detected
+- No automation detected (file watchers, AI agents, etc.)
 
 ---
 
@@ -422,18 +398,6 @@ If verification fails: fix in the worktree. Do NOT proceed to merge.
 
 ## Phase 5: Safe Merge
 
-### Pre-merge checks
-
-```bash
-# 1. Pause all detected agents
-for AGENT in $DETECTED_AGENTS; do
-  curl -sf -X POST "$AGENT/loop/pause" 2>/dev/null
-done
-
-# 2. Check agent has no active background tasks (if applicable)
-# curl -sf "$AGENT_URL/status" → check active delegations
-```
-
 ### Merge
 
 ```bash
@@ -454,16 +418,11 @@ $BUILD_CMD && $TYPECHECK_CMD && $TEST_CMD
 ```bash
 git worktree remove "$WORKTREE_DIR"
 git branch -d "$BRANCH"
-
-# Resume all detected agents
-for AGENT in $DETECTED_AGENTS; do
-  curl -sf -X POST "$AGENT/loop/resume" 2>/dev/null
-done
 ```
 
 ### Rollback
 
-**If merge has conflicts:** resolve in main, re-verify, do NOT resume agents until verified.
+**If merge has conflicts:** resolve in main, re-verify.
 
 **If verification fails after merge:**
 ```bash
@@ -471,15 +430,8 @@ git merge --abort          # If not yet committed
 # OR
 git reset --merge HEAD~1   # If already committed
 
-# Resume agents — main is back to pre-merge state
-for AGENT in $DETECTED_AGENTS; do
-  curl -sf -X POST "$AGENT/loop/resume" 2>/dev/null
-done
-
 # Debug in the worktree (don't delete it yet)
 ```
-
-**If no agents detected:** skip all pause/resume. Merge protocol still applies.
 
 ### Stale Worktree Cleanup
 
@@ -514,14 +466,11 @@ git push origin main
 - **`[forge]`** prefix on merge commits — identifies planned merges (agents/CI can filter)
 - **`feature/<plan-filename>`** branch naming — traceable to source plan
 - **`../<project>-forge-<plan-name>`** worktree location — unique per plan, sibling directory, avoids collision
-- **`$AGENT_URL`** env var — override default agent endpoint
-
 ## Red Flags
 
 - **Never skip isolation for multi-task plans** — worktree is cheap, debugging race conditions is not
 - **Never merge without passing verification** — evidence before claims
 - **Never skip the classification table** — always generate and log (yolo mode logs without confirmation)
-- **Never resume agents before merge is verified** — agents trigger on partial state
 - **Never force-push feature branches** — worktree refs can break
 - **Never hardcode verification commands** — detect from project config
 
@@ -534,7 +483,7 @@ git push origin main
   |
   +--> [ANALYZE] Read plan → dependency DAG → classify → present table
   |
-  +--> 1-2 trivial new-file-only + no agents? → Direct on main
+  +--> 1-2 trivial new-file-only + no automation? → Direct on main
   |
   +--> Everything else:
          |
@@ -546,7 +495,7 @@ git push origin main
          |      Adapt as you go
          |
          +--> Verify: $BUILD_CMD + $TYPECHECK_CMD + $TEST_CMD
-         +--> Merge: pause agents → [forge] commit → verify on main → clean up → resume
+         +--> Merge: [forge] commit → verify on main → clean up
          +--> Push
 ```
 
@@ -575,7 +524,7 @@ Pushed.
 > /forge docs/plans/context-optimization.md
 
 [SENSE] TypeScript project. Build: pnpm build. Test: pnpm test.
-        Typecheck: pnpm typecheck. Agent detected at localhost:3001 (Kuro).
+        Typecheck: pnpm typecheck. CI detected (.github/workflows/).
 
 6 tasks found.
 
