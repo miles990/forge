@@ -141,9 +141,19 @@ cat forge.md | your-llm-cli --system-prompt -
 
 ## Usage
 
-### 1. Write a plan
+### 0. Invoke forge
 
-Create a markdown file describing what you want to build. Each task should be a clear, actionable unit:
+| Platform | How to invoke |
+|----------|---------------|
+| **Claude Code** | `/forge plan.md` or `/forge "description"` |
+| **OpenClaw** | "Use the forge skill to execute plan.md" |
+| **Cursor / Windsurf** | "Follow the forge workflow to execute plan.md" |
+| **Aider** | "Follow the forge workflow in forge.md to execute plan.md" |
+| **Any LLM** | "Follow the forge workflow to: [your description]" |
+
+### 1. Write a plan (or let AI write it)
+
+Create a markdown file, or just describe what you want and let forge generate the plan:
 
 ```markdown
 # My Feature Implementation Plan
@@ -205,7 +215,7 @@ Classification adapts during execution — if a subagent task completes easily, 
 
 - **`[forge]`** prefix on merge commits — identifies planned merges
 - **`feature/<plan-filename>`** branch naming — traceable to source plan
-- **`../<project>-dev`** worktree location — sibling directory, predictable
+- **`../<project>-forge-<plan-name>`** worktree location — unique per plan, avoids collision
 
 ## For AI Agents
 

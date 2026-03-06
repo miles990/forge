@@ -137,6 +137,8 @@ mkdir -p docs/plans
 
 **Yolo mode:** Save the plan, log it, and proceed directly to Phase 0.
 
+> **Yolo + Plan mode safety note:** AI generates the plan AND executes it without human review. Verification gates (typecheck + tests) catch syntax/logic errors that break tests, but cannot catch "correct code that does the wrong thing." If the plan misinterprets the user's intent, the code will pass verification but not match what was wanted. For high-stakes changes, prefer Normal mode or provide a pre-written plan.
+
 After confirmation, the plan file feeds into the standard forge flow (Phase 0 → 1 → 2 → 3 → 4 → 5 → 6).
 
 ---
@@ -289,7 +291,8 @@ Proceed? (y/n)
 ```bash
 FEATURE_NAME=$(basename "$PLAN_FILE" .md)
 BRANCH="feature/$FEATURE_NAME"
-WORKTREE_DIR="../$(basename $PWD)-dev"
+WORKTREE_DIR="../$(basename $PWD)-forge-$FEATURE_NAME"
+# Unique per plan — avoids collision when multiple forge runs or users
 git worktree add "$WORKTREE_DIR" -b "$BRANCH"
 # All work happens in the worktree from here
 ```
@@ -382,9 +385,11 @@ $TEST_CMD        # Run tests
 $LINT_CMD        # Lint (if available)
 ```
 
-**Zero tolerance — all must pass before merge.**
+**Zero tolerance — all detected commands must pass before merge.**
 
 If verification fails: fix in the worktree. Do NOT proceed to merge.
+
+**If no test/build/typecheck commands are detected:** Skip those checks, but warn the user that verification is incomplete. Forge still proceeds — lack of tests is a project issue, not a forge issue. Log which checks were skipped for traceability.
 
 ---
 
@@ -455,7 +460,7 @@ Failed forge runs may leave behind worktrees. At the start of every `/forge` inv
 
 ```bash
 # List forge-created worktrees (pattern: *-dev)
-git worktree list | grep -- '-dev'
+git worktree list | grep -- '-forge-'
 ```
 
 If stale worktrees exist, prompt the user:
