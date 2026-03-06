@@ -1,41 +1,50 @@
 # Forge
 
-**The problem:** You tell your AI "add JWT authentication." It starts editing files on main. Three files in, tests break. You debug, realize it modified the wrong middleware. Meanwhile your auto-commit agent already pushed the broken code. You revert, start over, and babysit every step.
+**The problem isn't AI writing bad code — it's AI writing code unsafely.** One task fails and you lose all progress. A crash mid-execution means starting over. Your frontend and backend need coordinated changes but your AI only works in one repo. You have three AI sessions but they can't collaborate on the same plan. You step away and come back to a mess.
 
-**Forge fixes this.** Forge is a **skill file** — a single markdown file that teaches your AI coding assistant how to execute multi-task plans safely. Describe what you want. AI generates the plan, classifies tasks by complexity, isolates each task in its own worktree slot, runs uncertain tasks through two-stage review while certain tasks run in parallel, and only merges to main after verification passes. Failed tasks retry without losing successful work. Multiple sessions can work on the same plan. Works across repos.
+**Forge makes AI execution safe, resumable, and collaborative.** It's a **skill file** — a single markdown file that teaches any AI coding assistant how to execute multi-task plans with per-task isolation, automatic retry, crash-safe resume, cross-repo coordination, and multi-agent collaboration. Each task gets its own worktree slot, verifies independently, and merges to main only after passing. Failed tasks retry without losing successful work. Multiple sessions can claim and work on tasks from the same plan. Plans can span repos and include non-code tasks.
 
 ```bash
 # Describe what you want — forge handles everything else
 /forge "add user authentication with JWT" --yolo
 
-# Or write your own plan and let forge execute it
+# Execute a plan across repos with custom verification
+/forge docs/plans/api-v2-migration.md
+
+# Resume a crashed run — picks up where it left off
+/forge docs/plans/my-feature.md
+
+# Join an active run — claims unclaimed tasks alongside other sessions
 /forge docs/plans/my-feature.md
 ```
 
 Works with **Claude Code**, **Cursor**, **Windsurf**, **Copilot CLI**, **Cline**, **Roo Code**, **Aider**, and any LLM that can read files + run shell commands.
 
-> **Why "Forge"?** Named by [Kuro](https://kuro.page) (an autonomous AI agent). Raw material (plan) goes in, finished product (working code) comes out. The process inside is isolated, hot, and transformative — you don't reach in while it's working.
+> **Why "Forge"?** Named by [Kuro](https://kuro.page) (an autonomous AI agent). Raw material (plan) goes in, finished product comes out. The process inside is isolated, hot, and transformative — you don't reach in while it's working.
 
 ## What Happens
 
 ```
 /forge "add rate limiting"
-  -> AI senses codebase (architecture, patterns, conventions)
-  -> Generates implementation plan with tasks
-  -> Saves to docs/plans/YYYY-MM-DD-rate-limiting.md
-  -> You confirm (or --yolo skips this)
-  -> Falls through to execute mode ↓
+  → AI senses codebase (architecture, patterns, conventions)
+  → Generates implementation plan with tasks
+  → Saves to docs/plans/YYYY-MM-DD-rate-limiting.md
+  → You confirm (or --yolo skips this)
+  → Falls through to execute mode ↓
 
 /forge plan.md
-  -> AI reads plan, classifies each task
-  -> Per task: allocates worktree slot → executes → verifies → merges to main
-  -> Independent tasks run in parallel (up to 3 slots)
-  -> Failed tasks retry once (successful work preserved)
-  -> Final verification on main
-  -> Pushes
+  → Reads plan, classifies each task, builds dependency DAG
+  → Checks for existing progress (resume after crash / join active run)
+  → Per task: claim → allocate worktree slot → execute → verify → merge to main
+  → Independent tasks run in parallel (up to 3 slots)
+  → Cross-repo tasks handled per-repo (each repo has independent slots)
+  → Custom verify per task (non-code tasks supported)
+  → Failed tasks retry once (successful work preserved)
+  → Final verification on main (all repos)
+  → Pushes
 ```
 
-You confirm the classification table. Everything else is automated.
+You confirm the classification table. Everything else is automated — including retry, resume, and multi-agent coordination.
 
 ## Modes
 
@@ -321,10 +330,10 @@ Yes. Forge uses a file-based coordination protocol — each agent claims tasks v
 Yes. Add `**Verify:**` to your plan with a custom command (e.g., `curl -s localhost/health | grep ok`, `diff output.md expected.md`). Forge uses your custom command instead of auto-detected build/test. This works for documentation, infrastructure, data migrations, or any task with a verifiable outcome.
 
 **Is Forge an AI agent?**
-No. Forge is a workflow specification (a skill/prompt) that runs inside your existing AI assistant. It doesn't have its own model, runtime, or API. Think of it as a discipline layer — your AI already knows how to write code, forge teaches it how to execute a multi-task plan safely.
+No. Forge is a workflow specification (a skill/prompt) that runs inside your existing AI assistant. It doesn't have its own model, runtime, or API. Think of it as a discipline layer — your AI already knows how to write code, forge teaches it how to execute plans safely, recover from failures, and collaborate with other sessions.
 
 **How is Forge different from Devin / SWE-agent?**
-Devin and SWE-agent are full AI agents with their own environments. Forge is lightweight — a single markdown file that augments your existing AI assistant. No setup, no infrastructure, no monthly fee.
+Devin and SWE-agent are full AI agents with their own environments. Forge is lightweight — a single markdown file that augments your existing AI assistant. No setup, no infrastructure, no monthly fee. But it handles things they don't: crash-safe resume, multi-agent coordination on the same plan, cross-repo execution, and non-code tasks with custom verification.
 
 ## License
 
