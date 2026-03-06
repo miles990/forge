@@ -12,7 +12,7 @@
 /forge docs/plans/my-feature.md
 ```
 
-Works with **Claude Code**, **OpenClaw**, **Cursor**, **Windsurf**, **Aider**, and any LLM that can read files + run shell commands.
+Works with **Claude Code**, **Cursor**, **Windsurf**, **Copilot CLI**, **Cline**, **Roo Code**, **Aider**, and any LLM that can read files + run shell commands.
 
 > **Why "Forge"?** Named by [Kuro](https://kuro.page) (an autonomous AI agent). Raw material (plan) goes in, finished product (working code) comes out. The process inside is isolated, hot, and transformative — you don't reach in while it's working.
 
@@ -99,13 +99,16 @@ Yolo mode keeps all safety nets (worktree isolation, verification gates, rollbac
 
 | Platform | Subagent | Parallel | Worktree | Notes |
 |----------|----------|----------|----------|-------|
-| **Claude Code** (default) | `Agent` tool | Up to 4 simultaneous | Full support | Optimized path — two-stage review via separate agents |
-| OpenClaw | Skill execution | Depends on config | Full support | Adapts to OpenClaw's tool environment |
-| Cursor | Background agents | Limited | Full support | Use Cursor's agent dispatch |
-| Windsurf / Continue.dev | Depends | Depends | Full support | Load as rules file |
-| Aider | No | No | Full support | All tasks run sequential, verification still applies |
-| Copilot CLI | No | No | Full support | Sequential execution |
-| Any LLM + shell | Depends | Depends | `git worktree` | Auto-detects capabilities at runtime |
+| **Claude Code** | `Agent` tool | Up to 4 | Native | Optimized path — two-stage review via separate agents |
+| **Cursor** | Subagents, Background Agents | Up to 8 | Native (auto) | Background Agents run in cloud VMs |
+| **Windsurf** | Cascade | Up to 5 | Native | Multi-pane parallel Cascade sessions |
+| **Copilot CLI** | `/fleet`, specialized agents | Yes (via `/fleet`) | Native | Orchestrator auto-delegates independent subtasks |
+| **Cline** | Subagent tool (via CLI) | Yes (resource-limited) | Manual | Multiple CLI processes in separate directories |
+| **Roo Code** | Boomerang Tasks | Sequential only | Native | Orchestrator delegates to specialized modes, one at a time |
+| **OpenClaw** | `sessions_spawn` | Up to 5 children | Via plugins | Personal agent platform, not a coding IDE |
+| **Continue.dev** | Cloud Agents (CI only) | Manual (multiple CLI) | Manual | No native subagent spawn in IDE |
+| **Aider** | No | No | Manual | Single-agent design; multi-agent is community/external only |
+| **Any LLM + shell** | Depends | Depends | `git worktree` | Forge auto-detects capabilities at runtime |
 
 **Key principle:** When subagent spawn is unavailable, all tasks execute sequentially. Quality gates never degrade — isolation + verification + merge protocol are LLM-independent.
 
@@ -115,7 +118,7 @@ Yolo mode keeps all safety nets (worktree isolation, verification gates, rollbac
 curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/install.sh | bash
 ```
 
-Auto-detects your platform (Claude Code, OpenClaw, Cursor, Windsurf, Continue.dev, Aider) and installs to the right place.
+Auto-detects your platform (Claude Code, Cursor, Windsurf, Cline, Roo Code, Continue.dev, Aider) and installs to the right place.
 
 <details>
 <summary>Manual install</summary>
@@ -300,7 +303,7 @@ Forge is a skill file (a structured markdown prompt) that teaches any AI coding 
 A skill file is a markdown document that defines a reusable workflow for AI assistants — like a runbook that your AI follows. In Claude Code it installs as a plugin skill (`/forge`). In other tools (Cursor, Windsurf, Aider), it loads as a rules file or system prompt. One file, any platform.
 
 **Does Forge only work with Claude Code?**
-No. Forge is a single markdown file that any LLM can follow — Claude Code, Cursor, Windsurf, Aider, OpenClaw, or any AI with shell access. Claude Code gets the best experience (native `/forge` command + parallel subagents), but the core workflow (isolation, verification, merge) works everywhere.
+No. Forge is a single markdown file that any LLM can follow — Claude Code, Cursor, Windsurf, Copilot CLI, Cline, Roo Code, Aider, or any AI with shell access. Claude Code gets the best experience (native `/forge` command + parallel subagents), but the core workflow (isolation, verification, merge) works everywhere.
 
 **Is Forge an AI agent?**
 No. Forge is a workflow specification (a skill/prompt) that runs inside your existing AI assistant. It doesn't have its own model, runtime, or API. Think of it as a discipline layer — your AI already knows how to write code, forge teaches it how to execute a multi-task plan safely.

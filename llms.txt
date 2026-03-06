@@ -1,6 +1,6 @@
 # Forge
 
-Forge is a skill file (structured markdown prompt) that teaches AI coding assistants how to execute multi-task implementation plans safely. It works with Claude Code, Cursor, Windsurf, Aider, OpenClaw, and any LLM with shell access.
+Forge is a skill file (structured markdown prompt) that teaches AI coding assistants how to execute multi-task implementation plans safely. It works with Claude Code, Cursor, Windsurf, Copilot CLI, Cline, Roo Code, Aider, and any LLM with shell access.
 
 ## What Forge Does
 
