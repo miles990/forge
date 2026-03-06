@@ -36,6 +36,7 @@ LOCK_FILE="$MAIN_DIR/.git/forge-lite.lock"
 STATE_FILE="$MAIN_DIR/.git/forge-lite-state"
 STALE_HOURS=24
 FORGE_SLOTS=3
+SLOT_STALE_MINUTES=60
 
 # ============================================================
 # Safety infrastructure
@@ -96,6 +97,24 @@ is_persistent_slot() {
     [ "$base" = "${project}-forge-${i}" ] && return 0
   done
   return 1
+}
+
+# ============================================================
+# Stale marker detection (self-healing)
+# ============================================================
+
+# Returns 0 (true) if .forge-in-use is older than SLOT_STALE_MINUTES
+is_stale_marker() {
+  local marker="${1:?}"
+  [ -f "$marker" ] || return 1
+  local now mtime
+  now=$(date +%s)
+  if stat -f %m "$marker" >/dev/null 2>&1; then
+    mtime=$(stat -f %m "$marker")    # macOS
+  else
+    mtime=$(stat -c %Y "$marker" 2>/dev/null) || return 1  # Linux
+  fi
+  [ $(( (now - mtime) / 60 )) -ge "$SLOT_STALE_MINUTES" ]
 }
 
 # ============================================================
@@ -178,10 +197,15 @@ auto_prune() {
 preflight_check() {
   local cmd="${1:?}"
 
-  # Warn about previous crash state
+  # Auto-recover stale crash state (>1h = caller is long dead)
   if [ -f "$STATE_FILE" ]; then
-    echo "[warn] Previous run may have crashed: $(cat "$STATE_FILE")" >&2
-    echo "[warn] Run 'forge-lite.sh recover' to clean up, or continuing..." >&2
+    if is_stale_marker "$STATE_FILE"; then
+      echo "[preflight] Auto-recovering stale crash state: $(cat "$STATE_FILE")" >&2
+      cmd_recover 2>/dev/null || true
+    else
+      echo "[warn] Recent crash state: $(cat "$STATE_FILE")" >&2
+      echo "[warn] Run 'forge-lite.sh recover' to clean up, or continuing..." >&2
+    fi
   fi
 
   # For merge/yolo: ensure main is clean
@@ -337,11 +361,21 @@ cmd_create() {
   for i in $(seq 1 $FORGE_SLOTS); do
     local slot="${base_dir}-${i}"
     if [ -d "$slot" ]; then
-      if [ ! -f "$slot/.forge-in-use" ]; then
-        worktree_dir="$slot"
-        echo "[create] Reusing slot $i (node_modules cached)" >&2
-        break
+      if [ -f "$slot/.forge-in-use" ]; then
+        # Self-healing: reclaim slot if marker is stale (caller crashed)
+        if is_stale_marker "$slot/.forge-in-use"; then
+          local stale_branch
+          stale_branch=$(cat "$slot/.forge-in-use" 2>/dev/null)
+          echo "[create] Reclaiming stale slot $i ($stale_branch) — caller likely crashed" >&2
+          rm -f "$slot/.forge-in-use" "$slot/.forge-files"
+          worktree_dir="$slot"
+          break
+        fi
+        continue  # genuinely busy
       fi
+      worktree_dir="$slot"
+      echo "[create] Reusing slot $i (node_modules cached)" >&2
+      break
     else
       # Slot doesn't exist yet — will create it
       worktree_dir="$slot"
