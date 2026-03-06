@@ -28,9 +28,9 @@ What yolo mode removes: the classification table confirmation step. Forge decide
 
 | Pillar | How |
 |--------|-----|
-| **Isolation** | Always work in a git worktree on a feature branch. Main stays clean. No race conditions with auto-commit agents, CI, or teammates. |
-| **Quality** | Every task gets the right level of review. Subagent tasks get two-stage review (spec + code quality). Typecheck + tests gate every merge. Rollback on failure. |
-| **Efficiency** | Classify tasks by uncertainty + dependency graph. Independent certain tasks run in parallel. Uncertain tasks get subagent attention. Trivial tasks run direct. No wasted cycles. |
+| **Isolation** | Each task gets its own worktree slot. Main only receives verified, passing code. No race conditions with auto-commit agents, CI, or teammates. |
+| **Quality** | Every task gets the right level of review. Subagent tasks get two-stage review (spec + code quality). Typecheck + tests gate every per-task merge. Rollback on failure. |
+| **Efficiency** | Up to 3 tasks run in parallel across independent slots. Failed tasks retry without losing successful work. Crash-safe progress tracking enables resume. |
 
 ## The Flow
 
@@ -52,29 +52,25 @@ Input (plan file OR natural language description)
 [P. PLAN]     (Plan mode only) Sense codebase → generate plan → save → confirm with user
   |
   v
-[0. SENSE]    Detect project environment — language, build/test commands, agents, conventions
+[0. SENSE]    Detect project environment — language, build/test commands, agents, forge-lite.sh
   |
   v
 [1. ANALYZE]  Read plan, build dependency DAG, classify each task, present table
   |
   v
-[2. ISOLATE]  Create worktree + feature branch
+[2. PREPARE]  Detect isolation mode (task-level or single-worktree), check for resume state
   |
   v
-[3. EXECUTE]  Run tasks respecting dependency order + classification:
-  |            Subagent (uncertain) — sequential, two-stage review
-  |            Parallel (certain, independent) — simultaneous
-  |            Direct (trivial) — inline
-  |            Adapt in real-time based on results
+[3. EXECUTE]  Per-task: allocate slot → execute → verify → merge to main → release slot
+  |            Independent tasks run in parallel across slots (up to 3)
+  |            Failed tasks retry once, then skip (dependents blocked)
+  |            Adapt classification in real-time based on results
   |
   v
-[4. VERIFY]   Run detected build + typecheck + test commands (zero tolerance)
+[4. VERIFY]   Final verification on main (catches cross-task integration issues)
   |
   v
-[5. MERGE]    Safe merge to main — merge, verify, clean up
-  |
-  v
-[6. PUSH]     Push to trigger CI/CD
+[5. COMPLETE] Cleanup + push
 ```
 
 ---
@@ -171,10 +167,12 @@ Forge is designed for any LLM that can read files and execute shell commands. De
 
 ```
 Capability profile:
-  Subagent:    yes/no  → determines Parallel/Subagent availability
-  Max parallel: N      → determines batch size for Parallel tasks
-  Worktree:    yes/no  → determines isolation strategy
-  Shell:       yes     → required (no shell = cannot use forge)
+  Subagent:     yes/no  → determines Parallel/Subagent availability
+  Max parallel: N       → determines batch size for Parallel tasks
+  Worktree:     yes/no  → determines isolation strategy
+  Shell:        yes     → required (no shell = cannot use forge)
+  forge-lite:   yes/no  → yes = task-level isolation (per-task slots, retry, resume)
+                           no  = single worktree for all tasks
 ```
 
 ### Project Profile
@@ -188,7 +186,8 @@ Capability profile:
 | Lint command | `"lint"` script; `eslint`; `clippy`; `golangci-lint` | `$LINT_CMD` |
 | Project conventions | `CLAUDE.md`, `.cursor/rules`, `.github/copilot-instructions.md`, `CONVENTIONS.md` | Read + follow |
 | Existing worktrees | `git worktree list` | Avoid name conflicts |
-| Stale forge worktrees | `git worktree list \| grep -- '-dev'` | Prompt user to clean up before creating new one |
+| forge-lite.sh | `command -v forge-lite.sh \|\| ls scripts/forge-lite.sh` | Task-level isolation available |
+| Stale forge worktrees | `forge-lite.sh status` or `git worktree list \| grep -- '-forge-'` | Prompt user to clean up |
 
 ### Automation Awareness
 
@@ -269,34 +268,72 @@ Proceed? (y/n)
 
 ---
 
-## Phase 2: Isolate
+## Phase 2: Prepare Isolation
+
+Detect isolation strategy and check for resumable state.
+
+### Detect forge-lite.sh
+
+Check for `forge-lite.sh` in `scripts/` or PATH. This determines the isolation strategy.
+
+```
+forge-lite.sh detected?
+  yes → Task-level isolation (each task gets its own worktree slot)
+  no  → Single worktree (legacy — one worktree for all tasks)
+```
+
+**With forge-lite.sh** (preferred): Each task gets an independent worktree slot from a pool of 3. Tasks are verified and merged individually. Failed tasks can retry without losing successful work. File overlap detection prevents conflicts between concurrent tasks.
+
+**Without forge-lite.sh** (fallback): Create a single worktree for all tasks, execute sequentially, merge once at the end.
+
+```bash
+# Check availability
+FORGE_LITE=$(command -v forge-lite.sh || echo "scripts/forge-lite.sh")
+[ -x "$FORGE_LITE" ] && ISOLATION="task-level" || ISOLATION="single-worktree"
+```
+
+### Check for resume state
+
+If a previous forge run was interrupted, a progress file may exist:
+
+```bash
+PROGRESS_FILE=".forge-progress-$(basename "$PLAN_FILE" .md).json"
+```
+
+If found, display completed tasks and ask whether to resume or start fresh:
+```
+Found progress from previous run:
+  Task 1: ✅ completed (merged to main)
+  Task 2: ✅ completed (merged to main)
+  Task 3: ❌ failed (1 retry exhausted)
+  Task 4: ⏸ pending
+  Task 5: ⏸ pending
+
+Resume from Task 3? (y/n)
+```
+
+**Yolo mode:** Auto-resume — skip completed tasks, retry failed ones.
+
+### Single-worktree fallback
+
+If forge-lite.sh is not available, create one worktree for the entire plan (original behavior):
 
 ```bash
 FEATURE_NAME=$(basename "$PLAN_FILE" .md)
 BRANCH="feature/$FEATURE_NAME"
 WORKTREE_DIR="../$(basename $PWD)-forge-$FEATURE_NAME"
-# Unique per plan — avoids collision when multiple forge runs or users
 
-# If worktree for this plan already exists, abort — don't silently overwrite
 if [ -d "$WORKTREE_DIR" ]; then
-  echo "Worktree $WORKTREE_DIR already exists. Previous forge run for this plan?"
-  echo "Clean up first: git worktree remove $WORKTREE_DIR"
+  echo "Worktree $WORKTREE_DIR already exists. Clean up first."
   exit 1
 fi
 
 git worktree add "$WORKTREE_DIR" -b "$BRANCH"
-# All work happens in the worktree from here
 ```
 
-**If `forge-lite.sh` is available** (in `scripts/` or PATH), use it instead of raw git commands — it adds crash recovery, lock file, stale worktree auto-prune, and dependency installation:
-```bash
-forge-lite.sh create "$FEATURE_NAME"   # → prints worktree path
-# ... execute tasks in the worktree ...
-forge-lite.sh yolo "$WORKTREE_DIR" "commit message"  # verify + merge + cleanup
-# If something goes wrong: forge-lite.sh recover
-```
+Then proceed to Phase 3 in single-worktree mode (all tasks share one worktree, one final merge).
 
-**Skip worktree only when ALL of these are true:**
+**Skip worktree entirely only when ALL of these are true:**
 - 1-2 tasks only
 - All Direct classification
 - All create new files (no modifications)
@@ -306,57 +343,110 @@ forge-lite.sh yolo "$WORKTREE_DIR" "commit message"  # verify + merge + cleanup
 
 ## Phase 3: Adaptive Execution
 
-Execute tasks **respecting the dependency DAG**. Strategy depends on detected LLM capabilities.
+Execute tasks **respecting the dependency DAG**. Strategy depends on isolation mode and LLM capabilities.
 
-### Execution Strategy by LLM Capability
+### Task-Level Isolation (with forge-lite.sh)
 
-**Full capability (Claude Code — default):**
+Each task gets its own worktree slot. The lifecycle per task:
 
-Uses Claude Code's `Agent` tool for both Subagent and Parallel modes. This is the optimized path.
+```
+allocate slot → execute → commit → verify → merge to main → release slot
+```
 
-| Mode | Claude Code tool | Isolation |
-|------|-----------------|-----------|
-| Subagent | `Agent` tool (sequential, single instance) | Shares worktree |
-| Parallel | Multiple `Agent` tool calls (simultaneous, up to 4) | Each gets `isolation: "worktree"` (see note) |
-| Direct | Inline (no tool) | Current worktree |
+Independent tasks at the same DAG level run in parallel across different slots (up to 3 concurrent).
 
-Two-stage review for Subagent tasks also uses `Agent` tool — one agent implements, separate agents review.
+#### Per-Task Execution Loop
 
-> **Parallel isolation note:** When using Claude Code's `Agent` tool with `isolation: "worktree"`, each parallel agent gets its own temporary worktree branched from the feature branch. Claude Code manages the creation, execution, and merge of these sub-worktrees internally. For other LLMs without this built-in mechanism, parallel tasks should share the feature worktree and be carefully ordered to avoid file conflicts.
+For each dependency level in the DAG:
 
-**Partial capability (other LLMs with shell but no subagent spawn):**
+```
+1. Collect all tasks at this level (dependencies satisfied)
+2. For each task (parallel if independent, up to 3):
+   a. SLOT=$(forge-lite.sh create "task-N-name" --files "declared,files")
+      - Exit code 2 = file overlap with busy slot → wait and retry
+   b. Execute task in $SLOT (Subagent/Parallel/Direct — see below)
+   c. Commit changes in slot:
+      cd $SLOT && git add -A && git commit -m "[forge] task N: description"
+   d. forge-lite.sh yolo $SLOT "[forge] task N: description"
+      - Runs verification (typecheck + tests) in the slot
+      - Rebases onto main (handles concurrent merges)
+      - Merges to main
+      - Cleans up slot for reuse
+   e. Update progress file: mark task completed
+   f. If yolo fails:
+      - Retry once: fix in slot → re-run yolo
+      - If retry fails: mark task failed, log error, continue to next task
+3. Move to next dependency level (previous level's merges are in main)
+```
 
-All tasks execute sequentially. Classification still matters for review depth:
+#### Progress Tracking
 
-| Classification | Execution | Review |
-|----------------|-----------|--------|
-| Was-Subagent | Sequential, self-review carefully before proceeding | Run verification after each task |
-| Was-Parallel | Sequential, but can batch file writes | Run verification after batch |
-| Direct | Inline | Verify at end |
+Maintain a JSON progress file (gitignored) throughout execution:
 
-**Minimal capability (shell only, no file editing tools):**
+```json
+{
+  "plan": "docs/plans/2026-03-06-feature.md",
+  "startedAt": "2026-03-06T10:00:00Z",
+  "isolation": "task-level",
+  "tasks": {
+    "1": { "status": "completed", "mergedAt": "2026-03-06T10:02:30Z" },
+    "2": { "status": "completed", "mergedAt": "2026-03-06T10:02:45Z" },
+    "3": { "status": "failed", "retries": 1, "error": "test timeout" },
+    "4": { "status": "pending" },
+    "5": { "status": "pending" }
+  }
+}
+```
 
-Use shell commands (`cat`, `sed`, `echo >>`) for file operations. Sequential execution. Full verification protocol still applies.
+This enables crash recovery — on resume, skip completed tasks (already merged to main) and retry from the last failure point.
 
-### Subagent Tasks — Full Detail (Claude Code)
+#### File Overlap Handling
 
-1. **Dispatch implementer subagent** via `Agent` tool — provide full task text + relevant file contents + project conventions
-2. **Subagent implements** — explores, asks questions, writes code + tests, self-reviews
-3. **Dispatch spec compliance reviewer** via `Agent` tool — does code match what the plan asked for?
-4. **Dispatch code quality reviewer** via `Agent` tool — clean code, follows project conventions, no bugs?
+Each task declares which files it touches (from the plan's `**Files:**` field). `forge-lite.sh create --files` checks for overlap with busy slots:
+
+- **No overlap** → slot allocated, proceed
+- **Overlap detected (exit 2)** → wait for the conflicting slot to finish, then retry
+- **No files declared** → proceed without overlap check (task will still merge safely via rebase)
+
+#### Retry Logic
+
+Each task gets **1 automatic retry** on failure:
+
+| Failure type | Retry action |
+|-------------|--------------|
+| Verification fails (typecheck/test) | Fix in same slot → re-run `forge-lite.sh yolo` |
+| Merge conflict after rebase | `forge-lite.sh cleanup` → re-create slot → re-execute task from scratch |
+| Task execution error | Re-execute task in same slot |
+
+After retry exhaustion: mark task failed, continue with independent tasks. Tasks that depend on a failed task are skipped and marked `blocked`.
+
+### Single-Worktree Mode (without forge-lite.sh)
+
+All tasks share one worktree. Execute sequentially. Same task classification, but no per-task merge.
+
+### Task Execution by Classification
+
+These apply in both isolation modes:
+
+#### Subagent Tasks (Claude Code)
+
+1. **Dispatch implementer subagent** via `Agent` tool — provide full task text + relevant file contents + project conventions + worktree path
+2. **Subagent implements** — explores, writes code + tests, self-reviews
+3. **Dispatch spec compliance reviewer** via `Agent` tool — does code match the plan?
+4. **Dispatch code quality reviewer** via `Agent` tool — clean code, follows conventions, no bugs?
 5. **Fix loop** — if either review finds issues, dispatch fix agent, then re-review
-6. **Mark complete** — move to next task
+6. **Mark complete**
 
-### Parallel Tasks — Full Detail (Claude Code)
+#### Parallel Tasks (Claude Code)
 
-- Dispatch multiple `Agent` tool calls simultaneously (respect `Max parallel` from Phase 0)
-- Each agent gets: complete task spec + file paths + project conventions + test requirements
-- Agents work independently, no shared state
-- Collect all results, verify each passes tests
+- Dispatch multiple `Agent` tool calls simultaneously (respect slot availability — up to 3 in task-level mode)
+- Each agent gets: complete task spec + worktree slot path + project conventions
+- Agents work independently in separate slots, true filesystem isolation
+- Collect results — each slot independently verifies and merges
 
-### Direct Tasks (All LLMs)
+#### Direct Tasks (All LLMs)
 
-Execute trivially yourself. No subagent overhead.
+Execute trivially yourself. In task-level mode, Direct tasks can optionally skip slot allocation and work directly on main — only when: single file, < 10 lines, create-only (no modifications).
 
 ### Real-Time Adaptation
 
@@ -371,23 +461,11 @@ Modes can change during execution based on evidence:
 | Task reveals new dependency not in plan | Re-order remaining tasks |
 | Verification command differs from detected | Update project profile |
 
-### Commit all changes
-
-After all tasks are complete, commit everything in the worktree to the feature branch:
-
-```bash
-cd "$WORKTREE_DIR"
-git add -A
-git commit -m "feat: <plan summary>"
-```
-
-This is required before Phase 5 (merge). Without this commit, the merge will see "already up to date" and skip your changes.
-
 ---
 
-## Phase 4: Verify
+## Phase 4: Final Verification
 
-**Use the commands detected in Phase 0. Do not hardcode.**
+After all tasks are merged to main, run final verification on main itself:
 
 ```bash
 $BUILD_CMD       # Compile / bundle
@@ -396,72 +474,50 @@ $TEST_CMD        # Run tests
 $LINT_CMD        # Lint (if available)
 ```
 
-**Zero tolerance — all detected commands must pass before merge.**
+**Why verify again?** Each task was verified individually in its slot, but interactions between merged tasks could introduce issues. This catches cross-task integration problems.
 
-If verification fails: fix in the worktree. Do NOT proceed to merge.
+**Zero tolerance — all detected commands must pass.**
 
-**If no test/build/typecheck commands are detected:** Skip those checks, but warn the user that verification is incomplete. Forge still proceeds — lack of tests is a project issue, not a forge issue. Log which checks were skipped for traceability.
+If final verification fails:
+- Identify which task's merge introduced the failure (`git log --oneline` to see per-task merge commits)
+- Revert the problematic merge: `git revert <commit>`
+- Re-execute that task with the failure context
+- Re-verify
+
+**If no test/build/typecheck commands are detected:** Skip those checks, but warn the user. Log which checks were skipped.
 
 ---
 
-## Phase 5: Safe Merge
+## Phase 5: Complete
 
-### Merge
-
-```bash
-cd /path/to/main/worktree
-git merge --no-ff "$BRANCH" -m "[forge] <type>: <plan summary>"
-# <type> inferred from plan content: feat (new feature), fix (bug fix), refactor, docs, chore
-```
-
-### Post-merge verification
+### Cleanup
 
 ```bash
-# Run same verification as Phase 4 — catches merge-induced issues
-$BUILD_CMD && $TYPECHECK_CMD && $TEST_CMD
-```
+# Remove progress file
+rm -f "$PROGRESS_FILE"
 
-### Clean up
+# In single-worktree mode: clean up the worktree
+git worktree remove "$WORKTREE_DIR" 2>/dev/null
+git branch -d "$BRANCH" 2>/dev/null
 
-```bash
-git worktree remove "$WORKTREE_DIR"
-git branch -d "$BRANCH"
-```
-
-### Rollback
-
-**If merge has conflicts:** resolve in main, re-verify.
-
-**If verification fails after merge:**
-```bash
-git merge --abort          # If not yet committed
-# OR
-git reset --merge HEAD~1   # If already committed
-
-# Debug in the worktree (don't delete it yet)
+# Task-level mode: slots are cleaned up per-task by forge-lite.sh yolo
+# Check for any leftover slots from failed tasks:
+forge-lite.sh status  # shows busy/free/abandoned
+forge-lite.sh recover # cleans up any stale state
 ```
 
 ### Stale Worktree Cleanup
 
-Failed forge runs may leave behind worktrees. At the start of every `/forge` invocation (Phase 0), check for stale forge worktrees:
+At the start of every `/forge` invocation (Phase 0), check for stale forge worktrees:
 
 ```bash
-# List forge-created worktrees (pattern: *-dev)
-git worktree list | grep -- '-forge-'
+forge-lite.sh status   # preferred — shows slot states
+# or: git worktree list | grep -- '-forge-'
 ```
 
-If stale worktrees exist, prompt the user:
-```
-Found stale worktree: ../project-dev (feature/old-plan)
-  - Clean up and remove? (y/n)
-  - Or keep for debugging?
-```
+If stale worktrees exist, prompt the user (Normal mode) or auto-clean (Yolo mode).
 
-Do not silently delete — the user may be debugging a previous failure.
-
----
-
-## Phase 6: Push
+### Push
 
 ```bash
 git push origin main
@@ -472,39 +528,46 @@ git push origin main
 ## Conventions
 
 - **`[forge]`** prefix on merge commits — identifies planned merges (agents/CI can filter)
-- **`feature/<plan-filename>`** branch naming — traceable to source plan
-- **`../<project>-forge-<plan-name>`** worktree location — unique per plan, sibling directory, avoids collision
+- **`[forge] task N: description`** per-task merge commits in task-level mode — traceable to individual tasks
+- **`feature/task-N-name`** branch naming in task-level mode — one branch per task
+- **`../<project>-forge-{1,2,3}`** persistent worktree slots — reused across tasks, cached node_modules
+- **`.forge-progress-<plan>.json`** progress file — tracks task status for crash-safe resume (gitignored)
 ## Red Flags
 
-- **Never skip isolation for multi-task plans** — worktree is cheap, debugging race conditions is not
-- **Never merge without passing verification** — evidence before claims
+- **Never skip isolation for multi-task plans** — worktree slots are cheap, debugging race conditions is not
+- **Never merge without passing verification** — evidence before claims, per-task and final
 - **Never skip the classification table** — always generate and log (yolo mode logs without confirmation)
 - **Never force-push feature branches** — worktree refs can break
 - **Never hardcode verification commands** — detect from project config
+- **Never delete the progress file mid-run** — it enables crash-safe resume
+- **Never skip failed-task dependents silently** — mark them `blocked` and report
 
 ## Quick Reference
 
 ```
 /forge plan.md
   |
-  +--> [SENSE] Detect language, build/test commands, agents, conventions
+  +--> [SENSE] Detect language, build/test commands, agents, forge-lite.sh
   |
   +--> [ANALYZE] Read plan → dependency DAG → classify → present table
   |
   +--> 1-2 trivial new-file-only + no automation? → Direct on main
   |
-  +--> Everything else:
-         |
-         +--> Create worktree + feature branch
-         +--> Execute by dependency level:
-         |      Independent + certain → Parallel
-         |      Uncertain / modifies existing → Subagent
-         |      Trivial → Direct
-         |      Adapt as you go
-         |
-         +--> Verify: $BUILD_CMD + $TYPECHECK_CMD + $TEST_CMD
-         +--> Merge: [forge] commit → verify on main → clean up
-         +--> Push
+  +--> forge-lite.sh available? → Task-level isolation (preferred):
+  |      |
+  |      +--> Per-task: allocate slot → execute → verify → merge to main
+  |      +--> Independent tasks → parallel across slots (up to 3)
+  |      +--> Failed task → retry once, skip if still fails
+  |      +--> Progress tracked → crash-safe resume
+  |
+  +--> No forge-lite.sh? → Single worktree (legacy):
+  |      |
+  |      +--> Create worktree + feature branch
+  |      +--> Execute all tasks in shared worktree
+  |      +--> Single verify + merge
+  |
+  +--> Final verify on main (cross-task integration)
+  +--> Cleanup + push
 ```
 
 ## Examples
@@ -527,30 +590,33 @@ Typecheck: EXIT 0. Tests: 42/42 pass.
 Pushed.
 ```
 
-**Complex (full forge workflow):**
+**Complex (task-level isolation):**
 ```
 > /forge docs/plans/context-optimization.md
 
 [SENSE] TypeScript project. Build: pnpm build. Test: pnpm test.
         Typecheck: pnpm typecheck. CI detected (.github/workflows/).
+        forge-lite.sh: available (3 slots). Isolation: task-level.
 
 6 tasks found.
 
-| # | Task | Mode | Reason | Depends On |
-|---|------|------|--------|------------|
-| 1 | FTS5 smart loading | Subagent | Modifies existing function | — |
-| 2 | Trail dedup | Parallel | New export, complete spec | — |
-| 3 | Auto-demotion | Subagent | New module + 3-file integration | #1 |
-| 4 | Haiku pruning | Parallel | New file, complete spec | — |
-| 5 | Cold storage | Parallel | Clear spec, independent | — |
-| 6 | Health telemetry | Direct | 5 lines in 2 files | #1, #3 |
+| # | Task | Mode | Reason | Files | Depends On |
+|---|------|------|--------|-------|------------|
+| 1 | FTS5 smart loading | Subagent | Modifies existing function | src/search.ts | — |
+| 2 | Trail dedup | Parallel | New export, complete spec | src/dedup.ts | — |
+| 3 | Auto-demotion | Subagent | New module + 3-file integration | src/demotion.ts | #1 |
+| 4 | Haiku pruning | Parallel | New file, complete spec | src/pruning.ts | — |
+| 5 | Cold storage | Parallel | Clear spec, independent | src/cold.ts | — |
+| 6 | Health telemetry | Direct | 5 lines in 2 files | src/health.ts | #1, #3 |
 
 Execution order:
-  Level 0: #1 (Subagent), #2 (Parallel), #4 (Parallel), #5 (Parallel)
-  Level 1: #3 (Subagent, needs #1)
-  Level 2: #6 (Direct, needs #1 + #3)
+  Level 0: #1 (slot 1) + #2 (slot 2) + #4 (slot 3)  — 3 parallel
+  Level 0b: #5 (slot freed by #2 or #4)
+  Level 1: #3 (slot, needs #1 merged to main first)
+  Level 2: #6 (Direct on main, needs #1 + #3)
 
-Creating worktree: ../project-forge-context-optimization (feature/context-optimization)
+Each task: verify → merge to main → slot released.
+Failed task: retry once → skip + block dependents if still fails.
 
 Proceed? (y/n)
 ```

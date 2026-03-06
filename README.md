@@ -28,13 +28,10 @@ Works with **Claude Code**, **Cursor**, **Windsurf**, **Copilot CLI**, **Cline**
 
 /forge plan.md
   -> AI reads plan, classifies each task
-  -> Creates worktree + feature branch (isolated from main)
-  -> Executes tasks:
-       Uncertain tasks -> Subagent (sequential, two-stage review)
-       Certain tasks   -> Parallel (simultaneous)
-       Trivial tasks   -> Direct (inline)
-  -> Typecheck + tests (must pass)
-  -> Merges to main, verifies again
+  -> Per task: allocates worktree slot → executes → verifies → merges to main
+  -> Independent tasks run in parallel (up to 3 slots)
+  -> Failed tasks retry once (successful work preserved)
+  -> Final verification on main
   -> Pushes
 ```
 
@@ -86,9 +83,9 @@ Yolo mode keeps all safety nets (worktree isolation, verification gates, rollbac
 
 | | What | Why |
 |-|------|-----|
-| **Isolation** | Git worktree + feature branch | No race conditions. Main stays clean. Safe from auto-commit agents, CI watchers, teammates. |
-| **Quality** | Two-stage review + verification gates | Every subagent task gets spec compliance + code quality review. Typecheck + tests gate every merge. |
-| **Efficiency** | Smart task classification | Certain tasks run in parallel. Uncertain tasks get focused attention. Trivial tasks run inline. No wasted cycles. |
+| **Isolation** | Each task gets its own worktree slot | No race conditions. Main only receives verified code. Safe from auto-commit agents, CI, teammates. |
+| **Quality** | Two-stage review + per-task verification gates | Every subagent task gets spec compliance + code quality review. Typecheck + tests gate every merge. |
+| **Efficiency** | Up to 3 tasks in parallel + auto-retry | Independent tasks run simultaneously across slots. Failed tasks retry without losing successful work. Crash-safe progress tracking. |
 
 ## Requirements
 
@@ -244,10 +241,11 @@ Proceed? (y/n)
 ```
 
 Confirm or override, then forge handles everything else:
-- Creates worktree + feature branch
-- Executes tasks with optimal strategy
-- Runs typecheck + tests (must pass)
-- Merges to main, verifies again
+- Allocates worktree slots per task (up to 3 in parallel)
+- Executes each task in isolation with optimal strategy
+- Per-task verification + merge to main
+- Failed tasks auto-retry once
+- Final verification on main
 - Pushes
 
 ### Task Classification
@@ -266,21 +264,22 @@ Forge works in a git worktree on a feature branch. **Main is never touched until
 
 | Scenario | What happens |
 |----------|-------------|
-| **Tests fail** | Forge fixes in the worktree and retries. Won't merge until all pass. |
-| **Merge conflict** | Forge resolves in main, re-verifies before completing. |
-| **Verification fails after merge** | Auto-rollback: `git reset --merge HEAD~1`. Main restored. |
-| **Forge crashes / you ctrl-C** | Worktree stays on disk. Resume manually or clean up: `git worktree remove ../project-forge-*` |
-| **Wrong plan / bad output** | Nothing reached main. Delete the worktree, fix the plan, re-run. |
+| **Tests fail** | Forge retries the task in its slot. Won't merge until all pass. |
+| **Merge conflict** | Rebase handles most cases automatically. If rebase conflicts, falls back to direct merge. |
+| **Verification fails after merge** | Auto-rollback: `git revert <commit>`. Successful tasks preserved. |
+| **Forge crashes / you ctrl-C** | Progress file tracks completed tasks. Re-run `/forge plan.md` to resume from where it stopped. |
+| **One task fails permanently** | Successful tasks are already merged to main. Only the failed task and its dependents are skipped. |
+| **Wrong plan / bad output** | Per-task commits make it easy to revert individual tasks. `git log --oneline` shows each `[forge] task N:` commit. |
 
-The worktree is your safety net — it's just a directory. You can inspect it, fix things manually, or delete it. Main stays clean until forge explicitly merges.
+Each task merges to main independently. A failure in task 3 doesn't lose the work from tasks 1 and 2.
 
 ## Configuration
 
 ### Conventions
 
-- **`[forge]`** prefix on merge commits — identifies planned merges
-- **`feature/<plan-filename>`** branch naming — traceable to source plan
-- **`../<project>-forge-<plan-name>`** worktree location — unique per plan, avoids collision
+- **`[forge] task N: description`** per-task merge commits — traceable to individual tasks
+- **`feature/task-N-name`** branch naming — one branch per task
+- **`../<project>-forge-{1,2,3}`** persistent worktree slots — reused across tasks, cached dependencies
 
 ## For AI Agents
 
@@ -297,7 +296,7 @@ Complete workflow specification: **[`SKILL.md`](skills/forge/SKILL.md)**
 ## FAQ
 
 **What is Forge?**
-Forge is a skill file (a structured markdown prompt) that teaches any AI coding assistant how to execute multi-task implementation plans safely. It classifies tasks by complexity, isolates work in a git worktree, executes with the optimal strategy (parallel, sequential, or inline), and only merges to main after all verification passes.
+Forge is a skill file (a structured markdown prompt) that teaches any AI coding assistant how to execute multi-task implementation plans safely. It classifies tasks by complexity, isolates each task in its own worktree slot, executes with the optimal strategy (parallel, sequential, or inline), and only merges to main after verification passes. Failed tasks retry automatically without losing successful work.
 
 **What is a skill file?**
 A skill file is a markdown document that defines a reusable workflow for AI assistants — like a runbook that your AI follows. In Claude Code it installs as a plugin skill (`/forge`). In other tools (Cursor, Windsurf, Aider), it loads as a rules file or system prompt. One file, any platform.

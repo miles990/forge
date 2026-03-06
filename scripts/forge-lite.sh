@@ -19,6 +19,7 @@
 #   forge-lite.sh merge <worktree-path> [message]  → Merge to main + cleanup
 #   forge-lite.sh yolo <worktree-path> [message]   → Verify + merge in one shot
 #   forge-lite.sh cleanup <worktree-path>          → Remove worktree without merging
+#   forge-lite.sh status                           → Show slot states (busy/free/abandoned)
 #   forge-lite.sh recover                          → Recover from a previous crash
 #
 # Exit code 2 = file overlap with busy slot (caller should wait and retry)
@@ -616,6 +617,32 @@ cmd_cleanup() {
   fi
 }
 
+cmd_status() {
+  local base_dir="$MAIN_DIR/../$(basename "$MAIN_DIR")-forge"
+  local total=0 busy=0 free=0
+
+  for i in $(seq 1 $FORGE_SLOTS); do
+    local slot="${base_dir}-${i}"
+    total=$((total + 1))
+    if [ -d "$slot" ] && [ -f "$slot/.forge-in-use" ]; then
+      if is_slot_abandoned "$slot/.forge-in-use"; then
+        echo "slot $i: abandoned (branch=$SLOT_BRANCH pid=$SLOT_PID) — reclaimable" >&2
+        free=$((free + 1))
+      else
+        local files=""
+        [ -f "$slot/.forge-files" ] && files=" files=$(cat "$slot/.forge-files" | tr '\n' ',')"
+        echo "slot $i: busy (branch=$SLOT_BRANCH pid=$SLOT_PID${files})" >&2
+        busy=$((busy + 1))
+      fi
+    else
+      echo "slot $i: free" >&2
+      free=$((free + 1))
+    fi
+  done
+
+  echo "total=$total busy=$busy free=$free"
+}
+
 cmd_recover() {
   if [ ! -f "$STATE_FILE" ]; then
     echo "[recover] No crash state found — nothing to recover" >&2
@@ -684,7 +711,7 @@ cmd_recover() {
 
 # Acquire lock for all commands except recover (which cleans up locks)
 case "${1:-}" in
-  recover) ;;
+  recover|status) ;;
   "") ;;
   *) acquire_lock ;;
 esac
@@ -697,9 +724,10 @@ case "${1:-}" in
   merge)   shift; cmd_merge "$@" ;;
   yolo)    shift; cmd_yolo "$@" ;;
   cleanup) shift; cmd_cleanup "$@" ;;
+  status)  cmd_status ;;
   recover) cmd_recover ;;
   *)
-    echo "Usage: forge-lite.sh <create|verify|merge|yolo|cleanup|recover> [args]" >&2
+    echo "Usage: forge-lite.sh <create|verify|merge|yolo|cleanup|status|recover> [args]" >&2
     echo "" >&2
     echo "Commands:" >&2
     echo "  create <task-name>              Create worktree + feature branch" >&2
@@ -707,6 +735,7 @@ case "${1:-}" in
     echo "  merge  <worktree-path> [msg]    Merge to main + cleanup" >&2
     echo "  yolo   <worktree-path> [msg]    Verify + merge in one shot" >&2
     echo "  cleanup <worktree-path>         Remove worktree without merging" >&2
+    echo "  status                          Show slot states (busy/free/abandoned)" >&2
     echo "  recover                         Recover from a previous crash" >&2
     exit 1
     ;;
