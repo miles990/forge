@@ -8,8 +8,9 @@
 #
 # Solution: A single script that handles the mechanical git plumbing safely —
 # lock file prevents parallel conflicts, state file enables crash recovery,
-# auto-prune cleans up stale worktrees, and deps are installed before verify
-# to prevent pnpm symlink corruption.
+# auto-prune cleans up stale worktrees, deps are installed before verify
+# to prevent pnpm symlink corruption, and a persistent worktree with cached
+# node_modules makes subsequent runs fast (first run installs, reuse skips).
 #
 # Usage:
 #   forge-lite.sh create <task-name>              → Create worktree + branch
@@ -142,27 +143,56 @@ preflight_check() {
 # Install dependencies if needed
 # ============================================================
 
+file_hash() {
+  md5 -q "$1" 2>/dev/null || md5sum "$1" 2>/dev/null | cut -d' ' -f1
+}
+
 install_deps() {
   local dir="${1:?}"
 
   if [ -f "$dir/package.json" ]; then
-    # Skip if node_modules is a real directory (not a symlink)
     if [ -d "$dir/node_modules" ] && [ ! -L "$dir/node_modules" ]; then
-      return 0
+      # node_modules exists — check if lockfile changed since last install
+      local lockfile=""
+      [ -f "$dir/pnpm-lock.yaml" ] && lockfile="$dir/pnpm-lock.yaml"
+      [ -f "$dir/package-lock.json" ] && lockfile="$dir/package-lock.json"
+      [ -f "$dir/bun.lockb" ] && lockfile="$dir/bun.lockb"
+      [ -f "$dir/yarn.lock" ] && lockfile="$dir/yarn.lock"
+
+      if [ -n "$lockfile" ] && [ -f "$dir/node_modules/.forge-lockfile-hash" ]; then
+        local current_hash saved_hash
+        current_hash=$(file_hash "$lockfile")
+        saved_hash=$(cat "$dir/node_modules/.forge-lockfile-hash" 2>/dev/null)
+        if [ "$current_hash" = "$saved_hash" ]; then
+          echo "[deps] Lockfile unchanged, skipping install" >&2
+          return 0
+        fi
+        echo "[deps] Lockfile changed, reinstalling..." >&2
+      else
+        return 0
+      fi
     fi
+
     # Remove broken or stale symlinks (worktree artifact)
     [ -L "$dir/node_modules" ] && rm "$dir/node_modules"
 
     local install_cmd="npm ci"
-    [ -f "$dir/pnpm-lock.yaml" ] && install_cmd="pnpm install --frozen-lockfile"
-    [ -f "$dir/bun.lockb" ] && install_cmd="bun install --frozen-lockfile"
-    [ -f "$dir/yarn.lock" ] && install_cmd="yarn install --frozen-lockfile"
+    local lockfile=""
+    [ -f "$dir/pnpm-lock.yaml" ] && install_cmd="pnpm install --frozen-lockfile" && lockfile="$dir/pnpm-lock.yaml"
+    [ -f "$dir/bun.lockb" ] && install_cmd="bun install --frozen-lockfile" && lockfile="$dir/bun.lockb"
+    [ -f "$dir/yarn.lock" ] && install_cmd="yarn install --frozen-lockfile" && lockfile="$dir/yarn.lock"
+    [ -z "$lockfile" ] && [ -f "$dir/package-lock.json" ] && lockfile="$dir/package-lock.json"
 
     echo "[deps] Running: $install_cmd" >&2
     (cd "$dir" && eval "$install_cmd") || {
       echo "[deps] FAILED: $install_cmd" >&2
       return 1
     }
+
+    # Save lockfile hash for future change detection
+    if [ -n "$lockfile" ] && [ -d "$dir/node_modules" ]; then
+      file_hash "$lockfile" > "$dir/node_modules/.forge-lockfile-hash"
+    fi
   elif [ -f "$dir/go.mod" ]; then
     echo "[deps] Running: go mod download" >&2
     (cd "$dir" && go mod download) || true
@@ -212,17 +242,10 @@ cmd_create() {
   local task_name="${1:?Usage: forge-lite.sh create <task-name>}"
   task_name=$(echo "$task_name" | tr ' ' '-' | tr -cd '[:alnum:]-_' | tr '[:upper:]' '[:lower:]')
 
-  # Auto-prune stale worktrees before creating new one
   auto_prune
 
   local branch="feature/$task_name"
-  local worktree_dir="$MAIN_DIR/../$(basename "$MAIN_DIR")-forge-$task_name"
-
-  if [ -d "$worktree_dir" ]; then
-    echo "Error: worktree already exists: $worktree_dir" >&2
-    echo "Clean up first: forge-lite.sh cleanup $worktree_dir" >&2
-    exit 1
-  fi
+  local worktree_dir="$MAIN_DIR/../$(basename "$MAIN_DIR")-forge"
 
   # Clean up leftover branch from previous crash
   if git -C "$MAIN_DIR" rev-parse --verify "$branch" >/dev/null 2>&1; then
@@ -231,7 +254,38 @@ cmd_create() {
   fi
 
   set_state "create" "$worktree_dir"
-  git -C "$MAIN_DIR" worktree add "$worktree_dir" -b "$branch" 2>&1
+
+  if [ -d "$worktree_dir" ]; then
+    # Check if worktree is in use by another task
+    if [ -f "$worktree_dir/.forge-in-use" ]; then
+      local busy_branch
+      busy_branch=$(cat "$worktree_dir/.forge-in-use" 2>/dev/null)
+      echo "[create] Persistent worktree busy ($busy_branch), using dedicated worktree" >&2
+      worktree_dir="$MAIN_DIR/../$(basename "$MAIN_DIR")-forge-$task_name"
+      git -C "$MAIN_DIR" worktree add "$worktree_dir" -b "$branch" 2>&1
+      install_deps "$worktree_dir"
+    else
+      # Reuse — reset to main, create new branch
+      echo "[create] Reusing persistent worktree (node_modules cached)" >&2
+      local old_branch
+      old_branch=$(git -C "$worktree_dir" rev-parse --abbrev-ref HEAD 2>/dev/null) || old_branch=""
+      git -C "$worktree_dir" checkout --detach HEAD 2>/dev/null || true
+      [ -n "$old_branch" ] && [ "$old_branch" != "HEAD" ] && \
+        git -C "$MAIN_DIR" branch -D "$old_branch" 2>/dev/null || true
+      git -C "$worktree_dir" checkout -b "$branch" main 2>&1
+      git -C "$worktree_dir" clean -fd 2>/dev/null || true
+      git -C "$worktree_dir" checkout -- . 2>/dev/null || true
+    fi
+  else
+    # First time — create worktree + install deps
+    echo "[create] First-time setup (installing dependencies)" >&2
+    git -C "$MAIN_DIR" worktree add "$worktree_dir" -b "$branch" 2>&1
+    install_deps "$worktree_dir"
+  fi
+
+  # Mark as in use
+  echo "$branch" > "$worktree_dir/.forge-in-use"
+
   clear_state
   echo "$worktree_dir"
 }
@@ -337,10 +391,18 @@ cmd_merge() {
     exit 1
   fi
 
-  # Cleanup
-  echo "[merge] Cleaning up worktree and branch..." >&2
-  git -C "$MAIN_DIR" worktree remove "$worktree" 2>/dev/null || rm -rf "$worktree"
-  git -C "$MAIN_DIR" branch -d "$branch" 2>/dev/null || true
+  # Keep persistent worktree for reuse, delete dedicated ones
+  local persistent_dir="$MAIN_DIR/../$(basename "$MAIN_DIR")-forge"
+  if [ "$(cd "$worktree" && pwd)" = "$(cd "$persistent_dir" 2>/dev/null && pwd)" ] 2>/dev/null; then
+    echo "[merge] Keeping worktree for reuse (node_modules cached)" >&2
+    rm -f "$worktree/.forge-in-use"
+    git -C "$worktree" checkout --detach HEAD 2>/dev/null || true
+    git -C "$MAIN_DIR" branch -d "$branch" 2>/dev/null || true
+  else
+    echo "[merge] Cleaning up dedicated worktree..." >&2
+    git -C "$MAIN_DIR" worktree remove "$worktree" 2>/dev/null || rm -rf "$worktree"
+    git -C "$MAIN_DIR" branch -d "$branch" 2>/dev/null || true
+  fi
 
   clear_state
   echo "[merge] Done. Merged $branch into main." >&2
@@ -360,6 +422,7 @@ cmd_cleanup() {
 
   local branch
   branch=$(git -C "$worktree" rev-parse --abbrev-ref HEAD 2>/dev/null) || branch=""
+  rm -f "$worktree/.forge-in-use"
 
   git -C "$MAIN_DIR" worktree remove "$worktree" 2>/dev/null || rm -rf "$worktree"
   [ -n "$branch" ] && git -C "$MAIN_DIR" branch -D "$branch" 2>/dev/null || true
