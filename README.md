@@ -2,7 +2,7 @@
 
 **The problem:** You tell your AI "add JWT authentication." It starts editing files on main. Three files in, tests break. You debug, realize it modified the wrong middleware. Meanwhile your auto-commit agent already pushed the broken code. You revert, start over, and babysit every step.
 
-**Forge fixes this.** Forge is a **skill file** — a single markdown file that teaches your AI coding assistant how to execute multi-task plans safely. Describe what you want. AI generates the plan, classifies tasks by complexity, isolates everything in a git worktree, runs uncertain tasks through two-stage review while certain tasks run in parallel, and only merges to main after typecheck + tests pass. You come back to a clean commit on main.
+**Forge fixes this.** Forge is a **skill file** — a single markdown file that teaches your AI coding assistant how to execute multi-task plans safely. Describe what you want. AI generates the plan, classifies tasks by complexity, isolates each task in its own worktree slot, runs uncertain tasks through two-stage review while certain tasks run in parallel, and only merges to main after verification passes. Failed tasks retry without losing successful work. Multiple sessions can work on the same plan. Works across repos.
 
 ```bash
 # Describe what you want — forge handles everything else
@@ -184,6 +184,8 @@ Forge parses any markdown with `### Task` headings. Here's the full format:
 
 **Goal:** One sentence describing the outcome.
 **Architecture:** 2-3 sentences about the approach. (optional)
+**Repo:** /path/to/repo              (optional — for cross-repo plans)
+**Verify:** custom-verify-command     (optional — overrides auto-detected build/test)
 
 ### Task 1: Short task name
 **Files:** Create `src/new-file.ts`, Modify `src/existing.ts`
@@ -193,6 +195,8 @@ logic, edge cases. The more detail, the better the AI executes.
 ### Task 2: Another task
 **Files:** Modify `src/routes/auth.ts`
 **Depends on:** Task 1
+**Repo:** /path/to/other/repo        (optional — overrides plan-level Repo)
+**Verify:** npm test -- --filter auth (optional — overrides plan-level Verify)
 Description. "Depends on" tells forge to run this after Task 1 completes.
 
 ### Task 3: Tests
@@ -206,9 +210,13 @@ Description. "Depends on" tells forge to run this after Task 1 completes.
 **Required:** `### Task N: Name` headings — forge uses these to identify tasks.
 
 **Optional but recommended:**
-- `**Files:**` — `Create` or `Modify` + exact paths. Helps forge classify tasks (new file = likely Parallel, modify existing = likely Subagent).
-- `**Depends on:**` — References to other tasks. Forge builds a dependency DAG from these — independent tasks can run simultaneously.
+- `**Files:**` — `Create` or `Modify` + exact paths. Helps forge classify tasks and detect file overlaps between concurrent tasks.
+- `**Depends on:**` — References to other tasks. Forge builds a dependency DAG — independent tasks can run simultaneously.
 - `**Goal:**` / `**Architecture:**` — Top-level context for the AI.
+
+**Optional (advanced):**
+- `**Repo:**` — Plan-level or per-task. Enables cross-repo plans (e.g., frontend + backend). Each repo has independent worktree slots.
+- `**Verify:**` — Plan-level or per-task. Custom verification command for non-code tasks (docs, infrastructure, data migrations). Replaces auto-detected build/test commands.
 
 **Minimal plan** (also works):
 
@@ -290,19 +298,27 @@ Complete workflow specification: **[`SKILL.md`](skills/forge/SKILL.md)**
 ## Works With Any Project
 
 - **Any language** — TypeScript, Python, Go, Rust, etc.
+- **Any task type** — code, docs, infrastructure, data migrations (pluggable verification)
+- **Cross-repo** — plan tasks across multiple repos, each with independent isolation
 - **With or without automation** — auto-detects file watchers, CI, AI agents → uses worktree isolation
 - **Any plan format** — reads task structure from markdown plans
 
 ## FAQ
 
 **What is Forge?**
-Forge is a skill file (a structured markdown prompt) that teaches any AI coding assistant how to execute multi-task implementation plans safely. It classifies tasks by complexity, isolates each task in its own worktree slot, executes with the optimal strategy (parallel, sequential, or inline), and only merges to main after verification passes. Failed tasks retry automatically without losing successful work.
+Forge is a skill file (a structured markdown prompt) that teaches any AI coding assistant how to execute multi-task plans safely. It classifies tasks by complexity, isolates each task in its own worktree slot, executes with the optimal strategy (parallel, sequential, or inline), and only merges to main after verification passes. Failed tasks retry automatically without losing successful work. Multiple sessions can work on the same plan. Plans can span multiple repos and include non-code tasks.
 
 **What is a skill file?**
 A skill file is a markdown document that defines a reusable workflow for AI assistants — like a runbook that your AI follows. In Claude Code it installs as a plugin skill (`/forge`). In other tools (Cursor, Windsurf, Aider), it loads as a rules file or system prompt. One file, any platform.
 
 **Does Forge only work with Claude Code?**
 No. Forge is a single markdown file that any LLM can follow — Claude Code, Cursor, Windsurf, Copilot CLI, Cline, Roo Code, Aider, or any AI with shell access. Claude Code gets the best experience (native `/forge` command + parallel subagents), but the core workflow (isolation, verification, merge) works everywhere.
+
+**Can multiple AI agents work on the same plan?**
+Yes. Forge uses a file-based coordination protocol — each agent claims tasks via a progress file, with heartbeat-based stale detection. No central orchestrator, no Redis, no extra infrastructure. Just a JSON file.
+
+**Can Forge handle non-code tasks?**
+Yes. Add `**Verify:**` to your plan with a custom command (e.g., `curl -s localhost/health | grep ok`, `diff output.md expected.md`). Forge uses your custom command instead of auto-detected build/test. This works for documentation, infrastructure, data migrations, or any task with a verifiable outcome.
 
 **Is Forge an AI agent?**
 No. Forge is a workflow specification (a skill/prompt) that runs inside your existing AI assistant. It doesn't have its own model, runtime, or API. Think of it as a discipline layer — your AI already knows how to write code, forge teaches it how to execute a multi-task plan safely.

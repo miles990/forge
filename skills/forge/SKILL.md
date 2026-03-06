@@ -52,25 +52,25 @@ Input (plan file OR natural language description)
 [P. PLAN]     (Plan mode only) Sense codebase → generate plan → save → confirm with user
   |
   v
-[0. SENSE]    Detect project environment — language, build/test commands, agents, forge-lite.sh
+[0. SENSE]    Detect environment — language, build/test, agents, forge-lite.sh, repos
   |
   v
-[1. ANALYZE]  Read plan, build dependency DAG, classify each task, present table
+[1. ANALYZE]  Read plan, build DAG, classify tasks, parse Repo/Verify, present table
   |
   v
-[2. PREPARE]  Detect isolation mode (task-level or single-worktree), check for resume state
+[2. PREPARE]  Detect isolation mode, check resume/join state, validate cross-repo
   |
   v
-[3. EXECUTE]  Per-task: allocate slot → execute → verify → merge to main → release slot
+[3. EXECUTE]  Per-task: claim → cd repo → allocate slot → execute → verify → merge
   |            Independent tasks run in parallel across slots (up to 3)
+  |            Custom verify per task, cross-repo support, multi-agent coordination
   |            Failed tasks retry once, then skip (dependents blocked)
-  |            Adapt classification in real-time based on results
   |
   v
-[4. VERIFY]   Final verification on main (catches cross-task integration issues)
+[4. VERIFY]   Final verification on main (per-repo, custom or auto-detected)
   |
   v
-[5. COMPLETE] Cleanup + push
+[5. COMPLETE] Last session → cleanup + push (all repos)
 ```
 
 ---
@@ -111,9 +111,13 @@ Write a structured plan with tasks. Each task should specify:
 
 **Goal:** [One sentence]
 **Architecture:** [2-3 sentences about approach]
+**Repo:** /path/to/repo              (optional — default: current directory)
+**Verify:** custom-verify-command     (optional — overrides auto-detected build/test)
 
 ### Task 1: [Component Name]
 **Files:** Create `src/path/file.ts`, Modify `src/path/existing.ts`
+**Repo:** /path/to/other/repo        (optional — overrides plan-level Repo)
+**Verify:** npm test -- --filter foo  (optional — overrides plan-level Verify)
 [Detailed description of what to implement]
 
 ### Task 2: [Tests]
@@ -121,6 +125,10 @@ Write a structured plan with tasks. Each task should specify:
 **Depends on:** Task 1
 [Test cases to cover]
 ```
+
+**Plan-level fields:**
+- `**Repo:**` — base repo for all tasks. Tasks in different repos specify their own `**Repo:**`
+- `**Verify:**` — custom verification command. Replaces auto-detected `$BUILD_CMD && $TYPECHECK_CMD && $TEST_CMD`. Useful for non-code tasks (docs, infra, data migrations)
 
 ### Step 4: Save and confirm
 
@@ -214,6 +222,8 @@ Read the plan file. Auto-detect task structure (headings, numbered lists, checkb
 2. **Dependencies** — does this task import/use output from another task? Shared types? Call sites?
 3. **Uncertainty** — is the code complete in the plan, or does it say "find and update"?
 4. **Scope** — how many files, how many lines of change?
+5. **Repo** — does the task specify a different `**Repo:**`? (cross-repo plan)
+6. **Verify** — does the task specify a custom `**Verify:**` command? (non-code tasks)
 
 ### Build Dependency DAG
 
@@ -246,21 +256,23 @@ Tasks at the same dependency level with no shared dependencies can run simultane
 ### Present classification table
 
 ```
-| # | Task | Mode | Reason | Depends On |
-|---|------|------|--------|------------|
-| 1 | Validation helper | Parallel | New file, complete spec | — |
-| 2 | Update registration | Subagent | Modifies existing fn | #1 |
-| 3 | Add tests | Parallel | Independent test file | #1 |
+| # | Task | Mode | Reason | Files | Repo | Verify | Depends On |
+|---|------|------|--------|-------|------|--------|------------|
+| 1 | Validation helper | Parallel | New file, complete spec | src/valid.ts | — | — | — |
+| 2 | Update registration | Subagent | Modifies existing fn | src/reg.ts | — | — | #1 |
+| 3 | Add tests | Parallel | Independent test file | tests/reg.test.ts | — | — | #1 |
 
 Execution order:
   Level 0: #1 (Parallel)
   Level 1: #2 (Subagent) + #3 (Parallel) — simultaneously after #1 completes
 
 Detected: TypeScript project, pnpm build/test, no agents detected.
-Worktree: ../project-dev (feature/my-feature)
+Verify: auto-detected (pnpm typecheck && pnpm test)
 
 Proceed? (y/n)
 ```
+
+Columns `Repo` and `Verify` only shown when at least one task uses them. `—` means inherit plan-level default.
 
 **Normal mode:** User confirms or overrides before proceeding.
 
@@ -292,17 +304,19 @@ FORGE_LITE=$(command -v forge-lite.sh || echo "scripts/forge-lite.sh")
 [ -x "$FORGE_LITE" ] && ISOLATION="task-level" || ISOLATION="single-worktree"
 ```
 
-### Check for resume state
+### Check for resume state / join existing run
 
-If a previous forge run was interrupted, a progress file may exist:
+The progress file is the shared coordination point for all forge instances working on the same plan:
 
 ```bash
 PROGRESS_FILE=".forge-progress-$(basename "$PLAN_FILE" .md).json"
 ```
 
-If found, display completed tasks and ask whether to resume or start fresh:
+**Three scenarios when a progress file exists:**
+
+**A. Previous run crashed (no active owners):**
 ```
-Found progress from previous run:
+Found progress from previous run (no active sessions):
   Task 1: ✅ completed (merged to main)
   Task 2: ✅ completed (merged to main)
   Task 3: ❌ failed (1 retry exhausted)
@@ -312,7 +326,51 @@ Found progress from previous run:
 Resume from Task 3? (y/n)
 ```
 
-**Yolo mode:** Auto-resume — skip completed tasks, retry failed ones.
+**B. Another session is actively working (has live heartbeats):**
+```
+Active forge run detected for this plan:
+  Task 1: ✅ completed
+  Task 2: 🔄 in_progress (owner: session-abc, heartbeat: 30s ago)
+  Task 3: ⏸ pending (claimable)
+  Task 4: ⏸ pending (claimable)
+
+Join and claim available tasks? (y/n)
+```
+
+**C. Stale session (heartbeat expired > 5 min):**
+Treat stale-owned tasks as abandoned → reclaimable (same as scenario A).
+
+**Yolo mode:** Auto-resume (A) or auto-join (B) — skip completed, claim pending tasks.
+
+### Multi-Agent Coordination
+
+When multiple forge instances (sessions, agents, CI workers) work on the same plan, the progress file is the coordination mechanism. No central orchestrator needed.
+
+**Session identity:** Generate a unique session ID on startup (e.g., `hostname-pid-timestamp`). Used as `owner` when claiming tasks.
+
+**Claim protocol:**
+1. Read progress file
+2. Find a task with `status: "pending"` and no `owner` (or stale owner)
+3. Write `owner: <session-id>`, `status: "in_progress"`, `claimedAt: <now>`
+4. Re-read file to confirm claim (detect race with other instances)
+5. If claim conflicts → pick another pending task
+
+**Heartbeat:** Update `heartbeatAt` in the progress file every 60 seconds during task execution. A heartbeat older than 5 minutes = session is dead, task is reclaimable.
+
+**No coordination needed?** Single-session runs work exactly the same — the session claims all tasks sequentially. The coordination protocol is zero-overhead when only one instance runs.
+
+### Cross-Repo Detection
+
+If the plan specifies `**Repo:**` (plan-level or per-task), verify each repo exists and has forge-lite.sh available:
+
+```bash
+for repo in <unique repos from plan>; do
+  [ -d "$repo/.git" ] || error "Repo not found: $repo"
+  # Each repo has its own independent slot pool
+done
+```
+
+Cross-repo tasks use `forge-lite.sh` in the target repo's context. Each repo's slots are independent — a task in repo A doesn't consume slots in repo B.
 
 ### Single-worktree fallback
 
@@ -360,45 +418,68 @@ Independent tasks at the same DAG level run in parallel across different slots (
 For each dependency level in the DAG:
 
 ```
-1. Collect all tasks at this level (dependencies satisfied)
-2. For each task (parallel if independent, up to 3):
-   a. SLOT=$(forge-lite.sh create "task-N-name" --files "declared,files")
+1. Collect all tasks at this level (dependencies satisfied, not completed, not blocked)
+2. For each task (parallel if independent, up to 3 slots):
+   a. CLAIM: Write owner + claimedAt + status:"in_progress" to progress file
+      - If task already claimed by another live session → skip, pick next
+   b. REPO: cd to task's repo (task-level Repo > plan-level Repo > current dir)
+   c. SLOT: forge-lite.sh create "task-N-name" --files "declared,files"
       - Exit code 2 = file overlap with busy slot → wait and retry
-   b. Execute task in $SLOT (Subagent/Parallel/Direct — see below)
-   c. Commit changes in slot:
-      cd $SLOT && git add -A && git commit -m "[forge] task N: description"
-   d. forge-lite.sh yolo $SLOT "[forge] task N: description"
-      - Runs verification (typecheck + tests) in the slot
-      - Rebases onto main (handles concurrent merges)
-      - Merges to main
-      - Cleans up slot for reuse
-   e. Update progress file: mark task completed
-   f. If yolo fails:
-      - Retry once: fix in slot → re-run yolo
+   d. EXECUTE: Run task in $SLOT (Subagent/Parallel/Direct — see below)
+      - Update heartbeatAt every 60s during execution
+   e. COMMIT: cd $SLOT && git add -A && git commit -m "[forge] task N: description"
+   f. VERIFY + MERGE:
+      - If task has custom Verify → forge-lite.sh verify with custom command
+      - Otherwise → forge-lite.sh yolo $SLOT "[forge] task N: description"
+        (runs auto-detected verification, rebases onto main, merges, cleans up)
+   g. UPDATE: Mark task completed + mergedAt in progress file
+   h. If verify/merge fails:
+      - Retry once: fix in slot → re-run verify+merge
       - If retry fails: mark task failed, log error, continue to next task
 3. Move to next dependency level (previous level's merges are in main)
 ```
 
 #### Progress Tracking
 
-Maintain a JSON progress file (gitignored) throughout execution:
+Maintain a JSON progress file (gitignored) throughout execution. This file serves three purposes: crash recovery, session handoff, and multi-agent coordination.
 
 ```json
 {
   "plan": "docs/plans/2026-03-06-feature.md",
   "startedAt": "2026-03-06T10:00:00Z",
   "isolation": "task-level",
+  "defaultRepo": ".",
+  "defaultVerify": null,
   "tasks": {
-    "1": { "status": "completed", "mergedAt": "2026-03-06T10:02:30Z" },
-    "2": { "status": "completed", "mergedAt": "2026-03-06T10:02:45Z" },
+    "1": {
+      "status": "completed",
+      "owner": "macbook-42-1709712000",
+      "claimedAt": "2026-03-06T10:00:05Z",
+      "heartbeatAt": "2026-03-06T10:02:25Z",
+      "mergedAt": "2026-03-06T10:02:30Z"
+    },
+    "2": {
+      "status": "in_progress",
+      "owner": "ci-runner-7-1709712100",
+      "claimedAt": "2026-03-06T10:02:35Z",
+      "heartbeatAt": "2026-03-06T10:03:00Z",
+      "repo": "/Users/user/Workspace/backend",
+      "verify": "go test ./..."
+    },
     "3": { "status": "failed", "retries": 1, "error": "test timeout" },
     "4": { "status": "pending" },
-    "5": { "status": "pending" }
+    "5": { "status": "blocked", "blockedBy": "3" }
   }
 }
 ```
 
-This enables crash recovery — on resume, skip completed tasks (already merged to main) and retry from the last failure point.
+**Task statuses:** `pending` → `in_progress` → `completed` | `failed` | `blocked`
+
+**Coordination fields:** `owner` (session ID), `claimedAt`, `heartbeatAt` (stale > 5min = reclaimable)
+
+**Per-task overrides:** `repo` (cross-repo), `verify` (custom verification) — only present when task differs from plan defaults
+
+This enables: crash recovery (skip completed), session handoff (resume pending), multi-agent coordination (claim/heartbeat), and cross-repo tracking.
 
 #### File Overlap Handling
 
@@ -465,18 +546,36 @@ Modes can change during execution based on evidence:
 
 ## Phase 4: Final Verification
 
-After all tasks are merged to main, run final verification on main itself:
+After all tasks are merged to main, run final verification on main itself.
+
+**Verify command resolution (highest priority wins):**
+1. Plan-level `**Verify:**` — custom command specified in the plan
+2. Auto-detected — `$BUILD_CMD && $TYPECHECK_CMD && $TEST_CMD && $LINT_CMD`
+3. None detected — warn user, proceed without verification
 
 ```bash
+# If plan specifies Verify:
+$PLAN_VERIFY_CMD
+
+# Otherwise, use auto-detected:
 $BUILD_CMD       # Compile / bundle
 $TYPECHECK_CMD   # Type checking
 $TEST_CMD        # Run tests
 $LINT_CMD        # Lint (if available)
 ```
 
+**Cross-repo plans:** Run final verification in each repo that had tasks. A cross-repo plan is only complete when all repos pass.
+
+```bash
+for repo in <repos with completed tasks>; do
+  cd "$repo"
+  # Run repo-specific verify (task-level Verify > plan-level Verify > auto-detected)
+done
+```
+
 **Why verify again?** Each task was verified individually in its slot, but interactions between merged tasks could introduce issues. This catches cross-task integration problems.
 
-**Zero tolerance — all detected commands must pass.**
+**Zero tolerance — all verification must pass.**
 
 If final verification fails:
 - Identify which task's merge introduced the failure (`git log --oneline` to see per-task merge commits)
@@ -484,16 +583,18 @@ If final verification fails:
 - Re-execute that task with the failure context
 - Re-verify
 
-**If no test/build/typecheck commands are detected:** Skip those checks, but warn the user. Log which checks were skipped.
+**If no verification commands exist (auto-detected or custom):** Skip, but warn the user. Log which checks were skipped.
 
 ---
 
 ## Phase 5: Complete
 
+**Only the last session to finish should run Phase 5.** Check progress file: if all tasks are `completed` (or `failed`/`blocked` with no `in_progress`), you're the last one — proceed. Otherwise, just release your claims and exit.
+
 ### Cleanup
 
 ```bash
-# Remove progress file
+# Remove progress file (only when all tasks are done)
 rm -f "$PROGRESS_FILE"
 
 # In single-worktree mode: clean up the worktree
@@ -520,7 +621,13 @@ If stale worktrees exist, prompt the user (Normal mode) or auto-clean (Yolo mode
 ### Push
 
 ```bash
+# Single-repo:
 git push origin main
+
+# Cross-repo: push each repo that had completed tasks
+for repo in <repos with completed tasks>; do
+  git -C "$repo" push origin main
+done
 ```
 
 ---
@@ -530,35 +637,43 @@ git push origin main
 - **`[forge]`** prefix on merge commits — identifies planned merges (agents/CI can filter)
 - **`[forge] task N: description`** per-task merge commits in task-level mode — traceable to individual tasks
 - **`feature/task-N-name`** branch naming in task-level mode — one branch per task
-- **`../<project>-forge-{1,2,3}`** persistent worktree slots — reused across tasks, cached node_modules
-- **`.forge-progress-<plan>.json`** progress file — tracks task status for crash-safe resume (gitignored)
+- **`../<project>-forge-{1,2,3}`** persistent worktree slots — reused across tasks, cached dependencies
+- **`.forge-progress-<plan>.json`** progress file — coordination point for resume, handoff, and multi-agent (gitignored)
+- **`**Repo:**`** in plan — enables cross-repo tasks (each repo has independent slot pool)
+- **`**Verify:**`** in plan — custom verification for non-code tasks (docs, infra, migrations)
 ## Red Flags
 
 - **Never skip isolation for multi-task plans** — worktree slots are cheap, debugging race conditions is not
 - **Never merge without passing verification** — evidence before claims, per-task and final
 - **Never skip the classification table** — always generate and log (yolo mode logs without confirmation)
 - **Never force-push feature branches** — worktree refs can break
-- **Never hardcode verification commands** — detect from project config
-- **Never delete the progress file mid-run** — it enables crash-safe resume
+- **Never hardcode verification commands** — detect from project config, or use plan's `**Verify:**`
+- **Never delete the progress file mid-run** — it enables crash-safe resume and multi-agent coordination
 - **Never skip failed-task dependents silently** — mark them `blocked` and report
+- **Never claim a task without checking heartbeat** — stale > 5min = reclaimable, live = hands off
+- **Never run Phase 5 while other sessions are active** — check progress file for `in_progress` tasks first
+- **Never mix repos in a single slot** — each repo has its own independent slot pool
 
 ## Quick Reference
 
 ```
 /forge plan.md
   |
-  +--> [SENSE] Detect language, build/test commands, agents, forge-lite.sh
+  +--> [SENSE] Detect language, build/test, agents, forge-lite.sh, repos
   |
-  +--> [ANALYZE] Read plan → dependency DAG → classify → present table
+  +--> [ANALYZE] Read plan → DAG → classify → parse Repo/Verify → present table
   |
   +--> 1-2 trivial new-file-only + no automation? → Direct on main
   |
   +--> forge-lite.sh available? → Task-level isolation (preferred):
   |      |
-  |      +--> Per-task: allocate slot → execute → verify → merge to main
+  |      +--> Progress file exists? → Resume / Join active run
+  |      +--> Per-task: claim → cd repo → allocate slot → execute → verify → merge
   |      +--> Independent tasks → parallel across slots (up to 3)
+  |      +--> Custom Verify per task → non-code tasks supported
+  |      +--> Cross-repo → each repo has independent slot pool
+  |      +--> Multi-agent → claim/heartbeat via progress file
   |      +--> Failed task → retry once, skip if still fails
-  |      +--> Progress tracked → crash-safe resume
   |
   +--> No forge-lite.sh? → Single worktree (legacy):
   |      |
@@ -566,8 +681,8 @@ git push origin main
   |      +--> Execute all tasks in shared worktree
   |      +--> Single verify + merge
   |
-  +--> Final verify on main (cross-task integration)
-  +--> Cleanup + push
+  +--> Final verify on main (per-repo, custom or auto-detected)
+  +--> Last session? → Cleanup + push (all repos)
 ```
 
 ## Examples
@@ -615,8 +730,50 @@ Execution order:
   Level 1: #3 (slot, needs #1 merged to main first)
   Level 2: #6 (Direct on main, needs #1 + #3)
 
-Each task: verify → merge to main → slot released.
+Each task: claim → verify → merge to main → slot released.
 Failed task: retry once → skip + block dependents if still fails.
 
 Proceed? (y/n)
+```
+
+**Cross-repo with custom verify:**
+```
+> /forge docs/plans/api-v2-migration.md
+
+[SENSE] Multi-repo plan detected.
+        Repo 1: ./backend (Go, go test ./...)
+        Repo 2: ./frontend (TypeScript, pnpm test)
+        forge-lite.sh: available in both repos.
+
+4 tasks found.
+
+| # | Task | Mode | Repo | Verify | Files | Depends On |
+|---|------|------|------|--------|-------|------------|
+| 1 | New API endpoints | Subagent | ./backend | go test ./api/... | api/v2.go | — |
+| 2 | DB migration | Direct | ./backend | migrate status | migrations/004.sql | — |
+| 3 | Update API client | Subagent | ./frontend | — | src/api.ts | #1 |
+| 4 | E2E tests | Subagent | ./frontend | pnpm test:e2e | tests/e2e/ | #1, #3 |
+
+Execution order:
+  Level 0: #1 (backend slot) + #2 (backend slot)  — same repo, 2 parallel
+  Level 1: #3 (frontend slot, needs #1)
+  Level 2: #4 (frontend slot, needs #1 + #3)
+
+Proceed? (y/n)
+```
+
+**Multi-agent resume:**
+```
+> /forge docs/plans/context-optimization.md
+
+Active forge run detected for this plan:
+  Task 1: ✅ completed (merged to main)
+  Task 2: ✅ completed (merged to main)
+  Task 3: 🔄 in_progress (owner: kuro-macbook-92, heartbeat: 20s ago)
+  Task 4: ⏸ pending (claimable)
+  Task 5: ⏸ pending (claimable)
+  Task 6: ⏸ pending (blocked by #3)
+
+Joining active run. Claiming Task 4...
+[slot 2] Executing Task 4: Haiku pruning
 ```
