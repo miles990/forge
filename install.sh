@@ -5,7 +5,7 @@ set -euo pipefail
 # Usage: curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/install.sh | bash
 
 REPO="miles990/forge"
-SKILL_URL="https://raw.githubusercontent.com/$REPO/main/forge/1.0.0/skills/forge/SKILL.md"
+SKILL_URL="https://raw.githubusercontent.com/$REPO/main/skills/forge/SKILL.md"
 SKILL_CONTENT=""
 
 fetch_skill() {
@@ -32,20 +32,20 @@ detect_and_install() {
     echo "[claude-code] Detected."
     if claude --help 2>&1 | grep -q "plugin"; then
       echo "  Plugin system available. Installing..."
-      claude marketplace:add "github:$REPO" 2>/dev/null || true
-      if claude plugin:add forge 2>/dev/null; then
-        echo "  Installed via claude plugin:add"
+      claude plugin marketplace add "$REPO" 2>/dev/null || true
+      if claude plugin install forge 2>/dev/null; then
+        echo "  Installed via claude plugin install"
         echo "  Use: /forge path/to/plan.md"
       else
         echo "  Auto-install failed. Run manually:"
-        echo "    claude marketplace:add github:$REPO"
-        echo "    claude plugin:add forge"
+        echo "    claude plugin marketplace add $REPO"
+        echo "    claude plugin install forge"
       fi
     else
       echo "  Plugin commands not available in this Claude Code version."
       echo "  Install manually when available:"
-      echo "    claude marketplace:add github:$REPO"
-      echo "    claude plugin:add forge"
+      echo "    claude plugin marketplace add $REPO"
+      echo "    claude plugin install forge"
     fi
     installed=1
   fi

@@ -70,10 +70,11 @@ Automatically detects Claude Code, OpenClaw, Cursor, Windsurf, Continue.dev and 
 ### Claude Code
 
 ```bash
-# From the marketplace
-claude plugin:add forge --marketplace github:miles990/forge
+# Add marketplace + install plugin
+claude plugin marketplace add miles990/forge
+claude plugin install forge
 
-# Or manually
+# Or use the quick install script
 curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/install.sh | bash
 ```
 
@@ -86,7 +87,7 @@ After installation, `/forge` is available in any Claude Code session.
 curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/install.sh | bash
 
 # Or manually
-curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/forge/1.0.0/skills/forge/SKILL.md \
+curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/skills/forge/SKILL.md \
   -o ~/.openclaw/custom_skills/forge.md
 ```
 
@@ -101,7 +102,7 @@ Then tell your agent: "Use the forge skill to execute my-plan.md"
 curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/install.sh | bash
 
 # Or manually — pick your editor:
-curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/forge/1.0.0/skills/forge/SKILL.md \
+curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/skills/forge/SKILL.md \
   -o .cursor/rules/forge.md          # Cursor
   # .windsurfrules/forge.md          # Windsurf
   # .continue/rules/forge.md         # Continue.dev
@@ -112,7 +113,7 @@ Then: "Follow the forge workflow to execute my-plan.md"
 ### Aider
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/forge/1.0.0/skills/forge/SKILL.md \
+curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/skills/forge/SKILL.md \
   -o forge.md
 aider --read forge.md
 ```
@@ -122,7 +123,7 @@ aider --read forge.md
 For agents like [mini-agent](https://github.com/miles990/mini-agent) or your own:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/forge/1.0.0/skills/forge/SKILL.md \
+curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/skills/forge/SKILL.md \
   -o your-agent/skills/forge.md
 ```
 
@@ -132,7 +133,7 @@ Forge is a single markdown file. Any LLM that can read files + run shell command
 
 ```bash
 # Download the skill
-curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/forge/1.0.0/skills/forge/SKILL.md \
+curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/skills/forge/SKILL.md \
   -o forge.md
 
 # Include in your LLM's context
@@ -258,7 +259,7 @@ MERGE   → pause agents → [forge] <type>: <summary> → verify on main → cl
 PUSH    → git push origin main
 ```
 
-**For the complete workflow specification, see [`SKILL.md`](forge/1.0.0/skills/forge/SKILL.md).** It contains all phases, classification rules, dependency DAG construction, LLM-adaptive execution strategies, agent detection, merge protocol, and rollback procedures.
+**For the complete workflow specification, see [`SKILL.md`](skills/forge/SKILL.md).** It contains all phases, classification rules, dependency DAG construction, LLM-adaptive execution strategies, agent detection, merge protocol, and rollback procedures.
 
 ### Hard Rules
 

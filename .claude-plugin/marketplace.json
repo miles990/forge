@@ -1,0 +1,17 @@
+{
+  "name": "forge",
+  "owner": {
+    "name": "miles990"
+  },
+  "metadata": {
+    "description": "Isolated, high-quality plan execution for any AI coding assistant"
+  },
+  "plugins": [
+    {
+      "name": "forge",
+      "source": "./",
+      "description": "One command. AI reads the plan, classifies tasks, isolates in a worktree, executes with optimal strategy, verifies, and merges.",
+      "version": "1.0.0"
+    }
+  ]
+}
