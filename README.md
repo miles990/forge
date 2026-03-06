@@ -1,24 +1,23 @@
 # Forge
 
-One command. Your AI reads the plan, classifies tasks, isolates in a worktree, executes with optimal strategy, verifies, and merges. You watch.
+**The problem:** You have a 6-task implementation plan. Your AI assistant executes them one by one, on main, with no isolation. Halfway through, tests break. You `git stash`, debug, realize task 3 conflicted with task 2. Meanwhile your auto-commit agent pushed broken code. You start over.
+
+**Forge fixes this.** One command — AI reads the plan, classifies tasks by complexity, isolates everything in a git worktree, runs uncertain tasks through two-stage review while certain tasks execute in parallel, gates the merge on typecheck + tests, and only touches main when everything passes.
+
+```bash
+# Full auto — AI generates plan + executes + verifies + merges + pushes
+/forge "add user authentication with JWT" --yolo
+
+# Or from an existing plan
+/forge docs/plans/my-feature.md
+
+# Plan mode — AI writes the plan, you confirm, then it executes
+/forge "add rate limiting"
+```
 
 Works with **Claude Code**, **OpenClaw**, **Cursor**, **Windsurf**, **Aider**, and any LLM that can read files + run shell commands.
 
-> **Why "Forge"?** Named by [Kuro](https://kuro.page) (an autonomous AI agent). The metaphor: raw material (plan) goes into the forge, finished product (working code) comes out. The process inside is isolated, hot, and transformative — you don't reach in while it's working.
-
-```bash
-# Execute a plan
-/forge docs/plans/my-feature.md
-
-# Or just describe what you want — AI writes the plan, then executes it
-/forge "add user authentication with JWT"
-
-# Full auto — no confirmation
-/forge "add rate limiting" --yolo
-
-# Any other LLM — include SKILL.md in context, then:
-# "Follow the forge workflow to add user authentication with JWT"
-```
+> **Why "Forge"?** Named by [Kuro](https://kuro.page) (an autonomous AI agent). Raw material (plan) goes in, finished product (working code) comes out. The process inside is isolated, hot, and transformative — you don't reach in while it's working.
 
 ## What Happens
 
@@ -140,6 +139,35 @@ curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/skills/forge/SK
 cat forge.md | your-llm-cli --system-prompt -
 ```
 
+## Uninstall
+
+### Claude Code
+
+```bash
+claude plugin uninstall forge
+```
+
+### Other platforms
+
+Delete the `forge.md` or `SKILL.md` file you installed:
+
+```bash
+# Cursor
+rm .cursor/rules/forge.md
+
+# Windsurf
+rm .windsurfrules/forge.md
+
+# Continue.dev
+rm .continue/rules/forge.md
+
+# OpenClaw
+rm ~/.openclaw/custom_skills/forge.md
+
+# Aider
+rm forge.md
+```
+
 ## Usage
 
 ### 0. Invoke forge
@@ -250,16 +278,16 @@ Forge works with any LLM that can read files and execute shell commands. Default
 ### Quick Reference
 
 ```
-SENSE  → detect LLM capabilities + project env + agents + stale worktrees
+SENSE  → detect LLM capabilities + project env + automation + stale worktrees
 ANALYZE → read plan → dependency DAG → classify → present table → user confirms
 ISOLATE → git worktree + feature branch
 EXECUTE → Subagent (uncertain) → Parallel (certain) → Direct (trivial), adapt in real-time
 VERIFY  → $BUILD_CMD + $TYPECHECK_CMD + $TEST_CMD (zero tolerance)
-MERGE   → pause agents → [forge] <type>: <summary> → verify on main → cleanup → resume
+MERGE   → [forge] <type>: <summary> → verify on main → cleanup
 PUSH    → git push origin main
 ```
 
-**For the complete workflow specification, see [`SKILL.md`](skills/forge/SKILL.md).** It contains all phases, classification rules, dependency DAG construction, LLM-adaptive execution strategies, agent detection, merge protocol, and rollback procedures.
+**For the complete workflow specification, see [`SKILL.md`](skills/forge/SKILL.md).** It contains all phases, classification rules, dependency DAG construction, LLM-adaptive execution strategies, merge protocol, and rollback procedures.
 
 ### Hard Rules
 
@@ -267,12 +295,12 @@ PUSH    → git push origin main
 - Never merge without passing verification
 - Never skip the classification table
 - Never force-push feature branches
-- Never resume agent before merge is verified
+- Never hardcode verification commands — detect from project config
 
 ## Works With Any Project
 
 - **Any language** — TypeScript, Python, Go, Rust, etc.
-- **With or without agents** — auto-detects auto-commit agents, adapts accordingly
+- **With or without automation** — auto-detects file watchers, CI, AI agents → uses worktree isolation
 - **Any plan format** — reads task structure from markdown plans
 
 ## License
