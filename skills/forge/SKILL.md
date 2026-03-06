@@ -387,6 +387,18 @@ Modes can change during execution based on evidence:
 | Task reveals new dependency not in plan | Re-order remaining tasks |
 | Verification command differs from detected | Update project profile |
 
+### Commit all changes
+
+After all tasks are complete, commit everything in the worktree to the feature branch:
+
+```bash
+cd "$WORKTREE_DIR"
+git add -A
+git commit -m "feat: <plan summary>"
+```
+
+This is required before Phase 5 (merge). Without this commit, the merge will see "already up to date" and skip your changes.
+
 ---
 
 ## Phase 4: Verify
