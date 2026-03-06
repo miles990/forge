@@ -1,18 +1,15 @@
 # Forge
 
-**The problem:** You have a 6-task implementation plan. Your AI assistant executes them one by one, on main, with no isolation. Halfway through, tests break. You `git stash`, debug, realize task 3 conflicted with task 2. Meanwhile your auto-commit agent pushed broken code. You start over.
+**The problem:** You tell your AI "add JWT authentication." It starts editing files on main. Three files in, tests break. You debug, realize it modified the wrong middleware. Meanwhile your auto-commit agent already pushed the broken code. You revert, start over, and babysit every step.
 
-**Forge fixes this.** One command — AI reads the plan, classifies tasks by complexity, isolates everything in a git worktree, runs uncertain tasks through two-stage review while certain tasks execute in parallel, gates the merge on typecheck + tests, and only touches main when everything passes.
+**Forge fixes this.** Describe what you want. AI generates the plan, classifies tasks by complexity, isolates everything in a git worktree, runs uncertain tasks through two-stage review while certain tasks run in parallel, and only merges to main after typecheck + tests pass. You come back to a clean commit on main.
 
 ```bash
-# Full auto — AI generates plan + executes + verifies + merges + pushes
+# Describe what you want — forge handles everything else
 /forge "add user authentication with JWT" --yolo
 
-# Or from an existing plan
+# Or write your own plan and let forge execute it
 /forge docs/plans/my-feature.md
-
-# Plan mode — AI writes the plan, you confirm, then it executes
-/forge "add rate limiting"
 ```
 
 Works with **Claude Code**, **OpenClaw**, **Cursor**, **Windsurf**, **Aider**, and any LLM that can read files + run shell commands.
