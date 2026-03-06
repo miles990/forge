@@ -9,8 +9,9 @@
 # Solution: A single script that handles the mechanical git plumbing safely —
 # lock file prevents parallel conflicts, state file enables crash recovery,
 # auto-prune cleans up stale worktrees, deps are installed before verify
-# to prevent pnpm symlink corruption, and a persistent worktree with cached
-# node_modules makes subsequent runs fast (first run installs, reuse skips).
+# to prevent pnpm symlink corruption, and 3 persistent worktree slots with
+# cached node_modules support concurrent runs (first run installs, reuse skips).
+# Before merge, rebase onto main reduces conflicts from concurrent work.
 #
 # Usage:
 #   forge-lite.sh create <task-name>              → Create worktree + branch
@@ -32,6 +33,7 @@ MAIN_DIR="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 LOCK_FILE="$MAIN_DIR/.git/forge-lite.lock"
 STATE_FILE="$MAIN_DIR/.git/forge-lite-state"
 STALE_HOURS=24
+FORGE_SLOTS=3
 
 # ============================================================
 # Safety infrastructure
@@ -79,6 +81,22 @@ trap on_exit EXIT
 trap 'exit 130' INT TERM
 
 # ============================================================
+# Persistent slot detection
+# ============================================================
+
+is_persistent_slot() {
+  local dir="${1:?}"
+  local base
+  base=$(basename "$dir")
+  local project
+  project=$(basename "$MAIN_DIR")
+  for i in $(seq 1 $FORGE_SLOTS); do
+    [ "$base" = "${project}-forge-${i}" ] && return 0
+  done
+  return 1
+}
+
+# ============================================================
 # Stale worktree auto-prune
 # ============================================================
 
@@ -94,6 +112,8 @@ auto_prune() {
 
   for dir in "$parent_dir/${project_name}-forge-"*; do
     [ -d "$dir" ] || continue
+    # Never auto-prune persistent slots
+    is_persistent_slot "$dir" && continue
     local mtime
     if stat -f %m "$dir" >/dev/null 2>&1; then
       mtime=$(stat -f %m "$dir")    # macOS
@@ -245,7 +265,7 @@ cmd_create() {
   auto_prune
 
   local branch="feature/$task_name"
-  local worktree_dir="$MAIN_DIR/../$(basename "$MAIN_DIR")-forge"
+  local base_dir="$MAIN_DIR/../$(basename "$MAIN_DIR")-forge"
 
   # Clean up leftover branch from previous crash
   if git -C "$MAIN_DIR" rev-parse --verify "$branch" >/dev/null 2>&1; then
@@ -253,32 +273,45 @@ cmd_create() {
     git -C "$MAIN_DIR" branch -D "$branch" 2>/dev/null || true
   fi
 
-  set_state "create" "$worktree_dir"
-
-  if [ -d "$worktree_dir" ]; then
-    # Check if worktree is in use by another task
-    if [ -f "$worktree_dir/.forge-in-use" ]; then
-      local busy_branch
-      busy_branch=$(cat "$worktree_dir/.forge-in-use" 2>/dev/null)
-      echo "[create] Persistent worktree busy ($busy_branch), using dedicated worktree" >&2
-      worktree_dir="$MAIN_DIR/../$(basename "$MAIN_DIR")-forge-$task_name"
-      git -C "$MAIN_DIR" worktree add "$worktree_dir" -b "$branch" 2>&1
-      install_deps "$worktree_dir"
+  # Find a free persistent slot (1..FORGE_SLOTS)
+  local worktree_dir=""
+  for i in $(seq 1 $FORGE_SLOTS); do
+    local slot="${base_dir}-${i}"
+    if [ -d "$slot" ]; then
+      if [ ! -f "$slot/.forge-in-use" ]; then
+        worktree_dir="$slot"
+        echo "[create] Reusing slot $i (node_modules cached)" >&2
+        break
+      fi
     else
-      # Reuse — reset to main, create new branch
-      echo "[create] Reusing persistent worktree (node_modules cached)" >&2
-      local old_branch
-      old_branch=$(git -C "$worktree_dir" rev-parse --abbrev-ref HEAD 2>/dev/null) || old_branch=""
-      git -C "$worktree_dir" checkout --detach HEAD 2>/dev/null || true
-      [ -n "$old_branch" ] && [ "$old_branch" != "HEAD" ] && \
-        git -C "$MAIN_DIR" branch -D "$old_branch" 2>/dev/null || true
-      git -C "$worktree_dir" checkout -b "$branch" main 2>&1
-      git -C "$worktree_dir" clean -fd 2>/dev/null || true
-      git -C "$worktree_dir" checkout -- . 2>/dev/null || true
+      # Slot doesn't exist yet — will create it
+      worktree_dir="$slot"
+      echo "[create] Creating slot $i (first-time setup)" >&2
+      break
     fi
+  done
+
+  set_state "create" "${worktree_dir:-dedicated}"
+
+  if [ -z "$worktree_dir" ]; then
+    # All slots busy — fallback to dedicated worktree (slow, full install)
+    echo "[create] All $FORGE_SLOTS slots busy, using dedicated worktree" >&2
+    worktree_dir="$MAIN_DIR/../$(basename "$MAIN_DIR")-forge-$task_name"
+    git -C "$MAIN_DIR" worktree add "$worktree_dir" -b "$branch" 2>&1
+    install_deps "$worktree_dir"
+  elif [ -d "$worktree_dir" ]; then
+    # Reuse existing slot — reset to main, create new branch
+    local old_branch
+    old_branch=$(git -C "$worktree_dir" rev-parse --abbrev-ref HEAD 2>/dev/null) || old_branch=""
+    git -C "$worktree_dir" checkout --detach HEAD 2>/dev/null || true
+    [ -n "$old_branch" ] && [ "$old_branch" != "HEAD" ] && \
+      git -C "$MAIN_DIR" branch -D "$old_branch" 2>/dev/null || true
+    git -C "$worktree_dir" checkout -b "$branch" main 2>&1
+    git -C "$worktree_dir" clean -fd 2>/dev/null || true
+    git -C "$worktree_dir" checkout -- . 2>/dev/null || true
+    install_deps "$worktree_dir"
   else
-    # First time — create worktree + install deps
-    echo "[create] First-time setup (installing dependencies)" >&2
+    # Create new slot
     git -C "$MAIN_DIR" worktree add "$worktree_dir" -b "$branch" 2>&1
     install_deps "$worktree_dir"
   fi
@@ -356,6 +389,13 @@ cmd_merge() {
     git -C "$worktree" commit -m "$message"
   fi
 
+  # Rebase onto latest main to reduce merge conflicts from concurrent work
+  echo "[merge] Rebasing $branch onto main..." >&2
+  if ! git -C "$worktree" rebase main 2>&1; then
+    echo "[merge] Rebase conflict — aborting rebase, will try direct merge" >&2
+    git -C "$worktree" rebase --abort 2>/dev/null || true
+  fi
+
   # Check if branch has commits ahead of main
   local ahead
   ahead=$(git -C "$MAIN_DIR" rev-list --count "main..$branch" 2>/dev/null) || ahead=0
@@ -391,10 +431,9 @@ cmd_merge() {
     exit 1
   fi
 
-  # Keep persistent worktree for reuse, delete dedicated ones
-  local persistent_dir="$MAIN_DIR/../$(basename "$MAIN_DIR")-forge"
-  if [ "$(cd "$worktree" && pwd)" = "$(cd "$persistent_dir" 2>/dev/null && pwd)" ] 2>/dev/null; then
-    echo "[merge] Keeping worktree for reuse (node_modules cached)" >&2
+  # Keep persistent slot worktrees for reuse, delete dedicated ones
+  if is_persistent_slot "$worktree"; then
+    echo "[merge] Keeping slot for reuse (node_modules cached)" >&2
     rm -f "$worktree/.forge-in-use"
     git -C "$worktree" checkout --detach HEAD 2>/dev/null || true
     git -C "$MAIN_DIR" branch -d "$branch" 2>/dev/null || true
@@ -424,10 +463,17 @@ cmd_cleanup() {
   branch=$(git -C "$worktree" rev-parse --abbrev-ref HEAD 2>/dev/null) || branch=""
   rm -f "$worktree/.forge-in-use"
 
-  git -C "$MAIN_DIR" worktree remove "$worktree" 2>/dev/null || rm -rf "$worktree"
-  [ -n "$branch" ] && git -C "$MAIN_DIR" branch -D "$branch" 2>/dev/null || true
-
-  echo "[cleanup] Removed $worktree" >&2
+  # Persistent slots: release but preserve (keep cached node_modules)
+  if is_persistent_slot "$worktree"; then
+    git -C "$worktree" checkout --detach HEAD 2>/dev/null || true
+    [ -n "$branch" ] && [ "$branch" != "HEAD" ] && \
+      git -C "$MAIN_DIR" branch -D "$branch" 2>/dev/null || true
+    echo "[cleanup] Released slot (node_modules preserved)" >&2
+  else
+    git -C "$MAIN_DIR" worktree remove "$worktree" 2>/dev/null || rm -rf "$worktree"
+    [ -n "$branch" ] && git -C "$MAIN_DIR" branch -D "$branch" 2>/dev/null || true
+    echo "[cleanup] Removed $worktree" >&2
+  fi
 }
 
 cmd_recover() {
