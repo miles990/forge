@@ -100,10 +100,51 @@ is_persistent_slot() {
 }
 
 # ============================================================
-# Stale marker detection (self-healing)
+# Slot marker helpers (self-healing state persistence)
 # ============================================================
 
-# Returns 0 (true) if .forge-in-use is older than SLOT_STALE_MINUTES
+# .forge-in-use format (3 lines):
+#   line 1: branch name
+#   line 2: caller PID (for instant liveness check)
+#   line 3: unix timestamp (fallback for stale detection)
+
+write_slot_marker() {
+  local slot_dir="${1:?}" branch="${2:?}" caller_pid="${3:-0}"
+  printf '%s\n%s\n%s\n' "$branch" "$caller_pid" "$(date +%s)" > "$slot_dir/.forge-in-use"
+}
+
+read_slot_marker() {
+  local marker="${1:?}"
+  SLOT_BRANCH="" SLOT_PID="" SLOT_TS=""
+  [ -f "$marker" ] || return 1
+  SLOT_BRANCH=$(sed -n '1p' "$marker" 2>/dev/null)
+  SLOT_PID=$(sed -n '2p' "$marker" 2>/dev/null)
+  SLOT_TS=$(sed -n '3p' "$marker" 2>/dev/null)
+}
+
+# Returns 0 (true) if the slot's caller is dead or marker is stale
+is_slot_abandoned() {
+  local marker="${1:?}"
+  read_slot_marker "$marker" || return 1
+
+  # Instant check: caller PID dead → abandoned
+  if [ -n "$SLOT_PID" ] && [ "$SLOT_PID" != "0" ]; then
+    if ! kill -0 "$SLOT_PID" 2>/dev/null; then
+      return 0  # caller is dead
+    fi
+  fi
+
+  # Fallback: timestamp too old → abandoned (handles PID recycling edge case)
+  if [ -n "$SLOT_TS" ] && [ "$SLOT_TS" != "0" ]; then
+    local now
+    now=$(date +%s)
+    [ $(( (now - SLOT_TS) / 60 )) -ge "$SLOT_STALE_MINUTES" ] && return 0
+  fi
+
+  return 1  # still alive
+}
+
+# Legacy compat: returns 0 if file mtime is stale (for state file check)
 is_stale_marker() {
   local marker="${1:?}"
   [ -f "$marker" ] || return 1
@@ -129,8 +170,8 @@ check_file_overlap() {
     local slot="${base_dir}-${i}"
     [ -f "$slot/.forge-in-use" ] || continue
 
-    local busy_branch
-    busy_branch=$(cat "$slot/.forge-in-use" 2>/dev/null)
+    read_slot_marker "$slot/.forge-in-use" || continue
+    local busy_branch="$SLOT_BRANCH"
 
     # Combine ACTUAL modified files (git diff) + declared files (planned work)
     # This catches both: files already changed + files not yet changed
@@ -326,11 +367,12 @@ cmd_create() {
   task_name=$(echo "$task_name" | tr ' ' '-' | tr -cd '[:alnum:]-_' | tr '[:upper:]' '[:lower:]')
   shift
 
-  # Parse --files option
-  local declared_files=""
+  # Parse options
+  local declared_files="" caller_pid="0"
   while [ $# -gt 0 ]; do
     case "$1" in
       --files) declared_files="${2:-}"; shift 2 ;;
+      --caller-pid) caller_pid="${2:-0}"; shift 2 ;;
       *) shift ;;
     esac
   done
@@ -362,11 +404,9 @@ cmd_create() {
     local slot="${base_dir}-${i}"
     if [ -d "$slot" ]; then
       if [ -f "$slot/.forge-in-use" ]; then
-        # Self-healing: reclaim slot if marker is stale (caller crashed)
-        if is_stale_marker "$slot/.forge-in-use"; then
-          local stale_branch
-          stale_branch=$(cat "$slot/.forge-in-use" 2>/dev/null)
-          echo "[create] Reclaiming stale slot $i ($stale_branch) — caller likely crashed" >&2
+        # Self-healing: reclaim slot if caller is dead or marker is stale
+        if is_slot_abandoned "$slot/.forge-in-use"; then
+          echo "[create] Reclaiming abandoned slot $i ($SLOT_BRANCH, pid=$SLOT_PID) — caller dead" >&2
           rm -f "$slot/.forge-in-use" "$slot/.forge-files"
           worktree_dir="$slot"
           break
@@ -409,8 +449,8 @@ cmd_create() {
     install_deps "$worktree_dir"
   fi
 
-  # Mark as in use
-  echo "$branch" > "$worktree_dir/.forge-in-use"
+  # Mark as in use (branch + caller PID + timestamp for liveness detection)
+  write_slot_marker "$worktree_dir" "$branch" "$caller_pid"
 
   # Save declared files for overlap detection
   if [ -n "$declared_files" ]; then
