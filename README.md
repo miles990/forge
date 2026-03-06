@@ -95,6 +95,20 @@ Yolo mode keeps all safety nets (worktree isolation, verification gates, rollbac
 - **Git** — forge uses worktrees for isolation
 - Any AI coding assistant that can read files and execute shell commands
 
+### Platform Support
+
+| Platform | Subagent | Parallel | Worktree | Notes |
+|----------|----------|----------|----------|-------|
+| **Claude Code** (default) | `Agent` tool | Up to 4 simultaneous | Full support | Optimized path — two-stage review via separate agents |
+| OpenClaw | Skill execution | Depends on config | Full support | Adapts to OpenClaw's tool environment |
+| Cursor | Background agents | Limited | Full support | Use Cursor's agent dispatch |
+| Windsurf / Continue.dev | Depends | Depends | Full support | Load as rules file |
+| Aider | No | No | Full support | All tasks run sequential, verification still applies |
+| Copilot CLI | No | No | Full support | Sequential execution |
+| Any LLM + shell | Depends | Depends | `git worktree` | Auto-detects capabilities at runtime |
+
+**Key principle:** When subagent spawn is unavailable, all tasks execute sequentially. Quality gates never degrade — isolation + verification + merge protocol are LLM-independent.
+
 ## Install
 
 ```bash
@@ -267,54 +281,9 @@ The worktree is your safety net — it's just a directory. You can inspect it, f
 
 ## For AI Agents
 
-> This section is for AI agents that invoke `/forge`. Humans can skip this.
+Technical reference for AI agents invoking `/forge`: **[docs/for-ai-agents.md](docs/for-ai-agents.md)**
 
-### LLM Compatibility
-
-Forge works with any LLM that can read files and execute shell commands. Default optimized for **Claude Code (Anthropic)**.
-
-| LLM / Platform | Subagent | Parallel | Worktree | Notes |
-|----------------|----------|----------|----------|-------|
-| **Claude Code** (default) | `Agent` tool | Up to 4 simultaneous | Full support | Optimized path — two-stage review via separate agents |
-| OpenClaw | Skill execution | Depends on config | Full support | Load as custom skill, adapts to OpenClaw's tool environment |
-| Cursor | Background agents | Limited | Full support | Use Cursor's agent dispatch |
-| Windsurf / Continue.dev | Depends | Depends | Full support | Load as rules file |
-| Aider | No | No | Full support | All tasks run sequential, verification still applies |
-| Copilot CLI | No | No | Full support | Sequential execution |
-| Custom agents (mini-agent, etc.) | Depends | Depends | Full support | Include SKILL.md in agent's skill pipeline |
-| Any LLM + shell | Depends | Depends | `git worktree` | Auto-detects capabilities at runtime |
-
-**Key principle:** When subagent spawn is unavailable, all tasks execute sequentially. The isolation + verification + merge protocol never degrades — quality gates are LLM-independent.
-
-### Invocation
-
-```
-/forge <path-to-plan.md>
-```
-
-**Input:** Any markdown file with task-like structure. **Output:** Verified code merged to main and pushed.
-
-### Quick Reference
-
-```
-SENSE  → detect LLM capabilities + project env + automation + stale worktrees
-ANALYZE → read plan → dependency DAG → classify → present table → user confirms
-ISOLATE → git worktree + feature branch
-EXECUTE → Subagent (uncertain) → Parallel (certain) → Direct (trivial), adapt in real-time
-VERIFY  → $BUILD_CMD + $TYPECHECK_CMD + $TEST_CMD (zero tolerance)
-MERGE   → [forge] <type>: <summary> → verify on main → cleanup
-PUSH    → git push origin main
-```
-
-**For the complete workflow specification, see [`SKILL.md`](skills/forge/SKILL.md).** It contains all phases, classification rules, dependency DAG construction, LLM-adaptive execution strategies, merge protocol, and rollback procedures.
-
-### Hard Rules
-
-- Never skip worktree for multi-task plans
-- Never merge without passing verification
-- Never skip the classification table
-- Never force-push feature branches
-- Never hardcode verification commands — detect from project config
+Complete workflow specification: **[`SKILL.md`](skills/forge/SKILL.md)**
 
 ## Works With Any Project
 
