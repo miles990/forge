@@ -2,7 +2,7 @@
 
 **The problem:** You tell your AI "add JWT authentication." It starts editing files on main. Three files in, tests break. You debug, realize it modified the wrong middleware. Meanwhile your auto-commit agent already pushed the broken code. You revert, start over, and babysit every step.
 
-**Forge fixes this.** Describe what you want. AI generates the plan, classifies tasks by complexity, isolates everything in a git worktree, runs uncertain tasks through two-stage review while certain tasks run in parallel, and only merges to main after typecheck + tests pass. You come back to a clean commit on main.
+**Forge fixes this.** Forge is a **skill file** — a single markdown file that teaches your AI coding assistant how to execute multi-task plans safely. Describe what you want. AI generates the plan, classifies tasks by complexity, isolates everything in a git worktree, runs uncertain tasks through two-stage review while certain tasks run in parallel, and only merges to main after typecheck + tests pass. You come back to a clean commit on main.
 
 ```bash
 # Describe what you want — forge handles everything else
@@ -325,7 +325,10 @@ PUSH    → git push origin main
 ## FAQ
 
 **What is Forge?**
-Forge is a plan execution tool for AI coding assistants. It takes an implementation plan (or a natural language description), classifies tasks by complexity, isolates work in a git worktree, executes tasks with the optimal strategy (parallel, sequential, or inline), and only merges to main after all verification passes.
+Forge is a skill file (a structured markdown prompt) that teaches any AI coding assistant how to execute multi-task implementation plans safely. It classifies tasks by complexity, isolates work in a git worktree, executes with the optimal strategy (parallel, sequential, or inline), and only merges to main after all verification passes.
+
+**What is a skill file?**
+A skill file is a markdown document that defines a reusable workflow for AI assistants — like a runbook that your AI follows. In Claude Code it installs as a plugin skill (`/forge`). In other tools (Cursor, Windsurf, Aider), it loads as a rules file or system prompt. One file, any platform.
 
 **Does Forge only work with Claude Code?**
 No. Forge is a single markdown file that any LLM can follow — Claude Code, Cursor, Windsurf, Aider, OpenClaw, or any AI with shell access. Claude Code gets the best experience (native `/forge` command + parallel subagents), but the core workflow (isolation, verification, merge) works everywhere.

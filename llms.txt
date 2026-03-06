@@ -1,0 +1,35 @@
+# Forge
+
+Forge is a skill file (structured markdown prompt) that teaches AI coding assistants how to execute multi-task implementation plans safely. It works with Claude Code, Cursor, Windsurf, Aider, OpenClaw, and any LLM with shell access.
+
+## What Forge Does
+
+Given a plan (markdown file or natural language description), Forge:
+1. Senses the project environment (language, build/test commands, automation)
+2. Classifies each task by complexity (Direct, Subagent, Parallel)
+3. Builds a dependency DAG to determine execution order
+4. Isolates all work in a git worktree on a feature branch
+5. Executes tasks with the optimal strategy (parallel for certain tasks, sequential with review for uncertain tasks)
+6. Gates the merge on typecheck + tests (zero tolerance)
+7. Merges to main only after all verification passes
+
+## Key Files
+
+- `skills/forge/SKILL.md` — The complete workflow specification. This is the skill file that AI assistants read and follow. Contains all phases, classification rules, execution strategies, merge protocol, and rollback procedures.
+- `install.sh` — Auto-detection installer for all supported platforms.
+- `README.md` — Human-readable documentation with modes, plan format, examples, and FAQ.
+
+## Usage
+
+Claude Code: `/forge plan.md` or `/forge "add feature X" --yolo`
+Other LLMs: "Follow the forge workflow to execute plan.md"
+
+## Modes
+
+- **Execute mode**: `/forge plan.md` — run an existing plan file
+- **Plan mode**: `/forge "description"` — AI generates plan, then executes
+- **Yolo mode**: append `--yolo` — skip all confirmation, full auto
+
+## Plan Format
+
+Plans use `### Task N: Name` headings. Optional: `**Files:**` (Create/Modify + paths), `**Depends on:**` (task dependencies), `**Goal:**` (top-level context).
