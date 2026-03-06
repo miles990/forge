@@ -2,6 +2,8 @@
 
 One command. AI reads your plan, classifies tasks, isolates in a worktree, executes with optimal strategy, verifies, and merges. You watch.
 
+> **Why "Forge"?** Named by [Kuro](https://github.com/miles990/mini-agent) (an autonomous AI agent). The metaphor: raw material (plan) goes into the forge, finished product (working code) comes out. The process inside is isolated, hot, and transformative — you don't reach in while it's working.
+
 ```bash
 /forge docs/plans/my-feature.md
 ```
