@@ -58,114 +58,55 @@ You confirm the classification table. Everything else is automated.
 
 ## Install
 
-### Quick install (auto-detects platform)
-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/install.sh | bash
 ```
 
-Automatically detects Claude Code, OpenClaw, Cursor, Windsurf, Continue.dev and installs to the right place.
+Auto-detects your platform (Claude Code, OpenClaw, Cursor, Windsurf, Continue.dev, Aider) and installs to the right place.
 
-### Claude Code
+<details>
+<summary>Manual install</summary>
+
+Forge is a single markdown file ([`SKILL.md`](skills/forge/SKILL.md)). Download it to wherever your AI reads instructions:
 
 ```bash
-# Add marketplace + install plugin
+# Claude Code (plugin system)
 claude plugin marketplace add miles990/forge
 claude plugin install forge
 
-# Or use the quick install script
-curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/install.sh | bash
-```
+# Cursor
+curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/skills/forge/SKILL.md \
+  -o .cursor/rules/forge.md
 
-After installation, `/forge` is available in any Claude Code session.
+# Windsurf
+curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/skills/forge/SKILL.md \
+  -o .windsurfrules/forge.md
 
-### OpenClaw
-
-```bash
-# Auto-install
-curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/install.sh | bash
-
-# Or manually
+# OpenClaw
 curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/skills/forge/SKILL.md \
   -o ~/.openclaw/custom_skills/forge.md
-```
 
-Then tell your agent: "Use the forge skill to execute my-plan.md"
-
-> Forge auto-detects OpenClaw's tool environment and adapts. Subagent spawning depends on your OpenClaw configuration.
-
-### Cursor / Windsurf / Continue.dev
-
-```bash
-# Auto-install (detects your editor)
-curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/install.sh | bash
-
-# Or manually — pick your editor:
+# Aider
 curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/skills/forge/SKILL.md \
-  -o .cursor/rules/forge.md          # Cursor
-  # .windsurfrules/forge.md          # Windsurf
-  # .continue/rules/forge.md         # Continue.dev
-```
+  -o forge.md && aider --read forge.md
 
-Then: "Follow the forge workflow to execute my-plan.md"
-
-### Aider
-
-```bash
+# Any LLM with shell access
 curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/skills/forge/SKILL.md \
   -o forge.md
-aider --read forge.md
 ```
-
-### Custom AI Agents
-
-For agents like [mini-agent](https://github.com/miles990/mini-agent) or your own:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/skills/forge/SKILL.md \
-  -o your-agent/skills/forge.md
-```
-
-### Any LLM with shell access
-
-Forge is a single markdown file. Any LLM that can read files + run shell commands can use it:
-
-```bash
-# Download the skill
-curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/skills/forge/SKILL.md \
-  -o forge.md
-
-# Include in your LLM's context
-cat forge.md | your-llm-cli --system-prompt -
-```
+</details>
 
 ## Uninstall
 
-### Claude Code
-
 ```bash
+# Claude Code
 claude plugin uninstall forge
-```
 
-### Other platforms
-
-Delete the `forge.md` or `SKILL.md` file you installed:
-
-```bash
-# Cursor
-rm .cursor/rules/forge.md
-
-# Windsurf
-rm .windsurfrules/forge.md
-
-# Continue.dev
-rm .continue/rules/forge.md
-
-# OpenClaw
-rm ~/.openclaw/custom_skills/forge.md
-
-# Aider
-rm forge.md
+# Other platforms — delete the file you installed
+rm .cursor/rules/forge.md          # Cursor
+rm .windsurfrules/forge.md         # Windsurf
+rm ~/.openclaw/custom_skills/forge.md  # OpenClaw
+rm forge.md                        # Aider / generic
 ```
 
 ## Usage
@@ -182,19 +123,53 @@ rm forge.md
 
 ### 1. Write a plan (or let AI write it)
 
-Create a markdown file, or just describe what you want and let forge generate the plan:
+Create a markdown file, or just describe what you want and let forge generate it for you.
+
+#### Plan Format
+
+Forge parses any markdown with `### Task` headings. Here's the full format:
 
 ```markdown
-# My Feature Implementation Plan
+# Feature Name
 
-### Task 1: Add user validation helper
-Create `src/validators/user.ts` with email and name validation functions.
+**Goal:** One sentence describing the outcome.
+**Architecture:** 2-3 sentences about the approach. (optional)
 
-### Task 2: Update registration endpoint
-Modify `src/routes/auth.ts` to use the new validation helper.
+### Task 1: Short task name
+**Files:** Create `src/new-file.ts`, Modify `src/existing.ts`
+Description of what to implement. Be specific — exact function signatures,
+logic, edge cases. The more detail, the better the AI executes.
 
-### Task 3: Add tests
-Create `tests/validators/user.test.ts` with full coverage.
+### Task 2: Another task
+**Files:** Modify `src/routes/auth.ts`
+**Depends on:** Task 1
+Description. "Depends on" tells forge to run this after Task 1 completes.
+
+### Task 3: Tests
+**Files:** Create `tests/feature.test.ts`
+**Depends on:** Task 1, Task 2
+- Test case A (input → expected output)
+- Test case B (edge case)
+- Test case C (error handling)
+```
+
+**Required:** `### Task N: Name` headings — forge uses these to identify tasks.
+
+**Optional but recommended:**
+- `**Files:**` — `Create` or `Modify` + exact paths. Helps forge classify tasks (new file = likely Parallel, modify existing = likely Subagent).
+- `**Depends on:**` — References to other tasks. Forge builds a dependency DAG from these — independent tasks can run simultaneously.
+- `**Goal:**` / `**Architecture:**` — Top-level context for the AI.
+
+**Minimal plan** (also works):
+
+```markdown
+# Add reverse utility
+
+### Task 1: Add reverse function
+Modify `src/utils.js` — add `reverse(str)` that returns the string reversed.
+
+### Task 2: Add tests
+Modify `tests/run.js` — test reverse with normal, empty, palindrome, single char inputs.
 ```
 
 ### 2. Run forge
