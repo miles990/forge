@@ -288,6 +288,14 @@ git worktree add "$WORKTREE_DIR" -b "$BRANCH"
 # All work happens in the worktree from here
 ```
 
+**If `forge-lite.sh` is available** (in `scripts/` or PATH), use it instead of raw git commands — it adds crash recovery, lock file, stale worktree auto-prune, and dependency installation:
+```bash
+forge-lite.sh create "$FEATURE_NAME"   # → prints worktree path
+# ... execute tasks in the worktree ...
+forge-lite.sh yolo "$WORKTREE_DIR" "commit message"  # verify + merge + cleanup
+# If something goes wrong: forge-lite.sh recover
+```
+
 **Skip worktree only when ALL of these are true:**
 - 1-2 tasks only
 - All Direct classification
