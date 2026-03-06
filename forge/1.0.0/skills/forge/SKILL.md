@@ -1,6 +1,6 @@
 ---
 name: forge
-description: Isolated, high-quality, high-efficiency plan execution. Worktree isolation + smart task classification + verification gates. Use when you have an implementation plan to execute.
+description: Isolated, high-quality, high-efficiency plan execution. Environment-aware, dependency-driven, adaptive. Use when you have an implementation plan to execute.
 ---
 
 # Forge
@@ -15,7 +15,7 @@ Isolated, high-quality, high-efficiency plan execution.
 |--------|-----|
 | **Isolation** | Always work in a git worktree on a feature branch. Main stays clean. No race conditions with auto-commit agents, CI, or teammates. |
 | **Quality** | Every task gets the right level of review. Subagent tasks get two-stage review (spec + code quality). Typecheck + tests gate every merge. Rollback on failure. |
-| **Efficiency** | Classify tasks by uncertainty. Certain tasks run in parallel. Uncertain tasks get subagent attention. Trivial tasks run direct. No wasted cycles. |
+| **Efficiency** | Classify tasks by uncertainty + dependency graph. Independent certain tasks run in parallel. Uncertain tasks get subagent attention. Trivial tasks run direct. No wasted cycles. |
 
 ## The Flow
 
@@ -23,67 +23,154 @@ Isolated, high-quality, high-efficiency plan execution.
 Plan file
   |
   v
-[1. ANALYZE] Read plan, extract tasks, classify each as Direct/Subagent/Parallel
+[0. SENSE]    Detect project environment — language, build/test commands, agents, conventions
   |
   v
-[2. ISOLATE] Create worktree + feature branch
+[1. ANALYZE]  Read plan, build dependency DAG, classify each task, present table
   |
   v
-[3. EXECUTE] Run tasks grouped by mode:
-  |  Phase A: Subagent (uncertain) — sequential, two-stage review each
-  |  Phase B: Parallel (certain) — simultaneous via Agent tool
-  |  Phase C: Direct (trivial) — inline
+[2. ISOLATE]  Create worktree + feature branch
   |
   v
-[4. VERIFY] typecheck + tests must pass (zero tolerance)
+[3. EXECUTE]  Run tasks respecting dependency order + classification:
+  |            Subagent (uncertain) — sequential, two-stage review
+  |            Parallel (certain, independent) — simultaneous
+  |            Direct (trivial) — inline
+  |            Adapt in real-time based on results
   |
   v
-[5. MERGE] Safe merge to main with rollback plan
+[4. VERIFY]   Run detected build + typecheck + test commands (zero tolerance)
   |
   v
-[6. PUSH] Push to trigger CI/CD
+[5. MERGE]    Safe merge to main — pause agents, merge, verify, resume
+  |
+  v
+[6. PUSH]     Push to trigger CI/CD
 ```
 
-## Phase 1: Analyze
+---
 
-Read the plan file. For each task, auto-classify by uncertainty:
+## Phase 0: Environment Sensing
 
-### Classification Rules
+Before touching any code, sense the project environment. **Do not assume — detect.**
 
-**Parallel (Certain)** — can run simultaneously, no exploration needed:
-- Creates new file with complete code in plan
-- Pure test file (independent)
-- Plan has full code snippets, no ambiguity
+### LLM Capability Detection
 
-**Subagent (Uncertain)** — needs exploration, context, or cross-file coordination:
-- Modifies existing complex function
-- Integration point (imports/call sites across multiple files)
-- Plan says "find...then change" (uncertain location)
-- Depends on previous task's output
-- First task of a new pattern (once proven, similar tasks upgrade to Parallel)
+Forge is designed for any LLM that can read files and execute shell commands. Detect your own capabilities to choose the best execution strategy.
 
-**Direct (Trivial)** — not worth spawning a subagent:
-- < 10 lines change in a single file
-- Config/constant change
-- Adding an export or import
+| Capability | Check | Impact on execution |
+|------------|-------|---------------------|
+| **Subagent spawn** | Can you dispatch independent AI agents? (e.g., Claude Code `Agent` tool, Cursor background agents) | Yes → Parallel + Subagent modes available. No → all tasks run sequentially as Direct. |
+| **Shell execution** | Can you run shell commands? | Yes → full workflow. No → forge cannot run (needs git, build, test). |
+| **File read/write** | Can you read and edit files? | Required for all modes. |
+| **Worktree support** | Can you `cd` into another directory and work there? | Yes → full isolation. No → use branch-only isolation (`git checkout -b`). |
+| **Concurrent agents** | How many subagents can run simultaneously? | Determines max parallelism for Parallel tasks. |
 
-**Present classification table to user before executing:**
+**Default (Claude Code / Anthropic models):** All capabilities available. `Agent` tool for subagents with worktree isolation. Up to 4 concurrent agents.
+
+**Fallback for limited LLMs:** If subagent spawn is unavailable, all tasks execute sequentially as Direct. The isolation + verification + merge protocol still applies — quality gates don't degrade.
 
 ```
-| # | Task | Mode | Reason |
-|---|------|------|--------|
-| 1 | New search helper | Parallel | New file, complete spec |
-| 2 | Modify buildContext | Subagent | Complex existing function |
-| 3 | Add constant | Direct | Single line change |
-
-Execution order: Phase A (Subagent: #2) -> Phase B (Parallel: #1) -> Phase C (Direct: #3)
+Capability profile:
+  Subagent:    yes/no  → determines Parallel/Subagent availability
+  Max parallel: N      → determines batch size for Parallel tasks
+  Worktree:    yes/no  → determines isolation strategy
+  Shell:       yes     → required (no shell = cannot use forge)
 ```
 
-User confirms or overrides before proceeding.
+### Project Profile
+
+| Detect | How | Store as |
+|--------|-----|----------|
+| Language / framework | `package.json`? `Cargo.toml`? `go.mod`? `pyproject.toml`? `Makefile`? | `$LANG` |
+| Build command | `"build"` script in package.json → `pnpm build`; `Makefile` → `make build`; etc. | `$BUILD_CMD` |
+| Test command | `"test"` script → `pnpm test`; `pytest`; `go test ./...`; `cargo test` | `$TEST_CMD` |
+| Typecheck command | `"typecheck"` script → `pnpm typecheck`; `mypy .`; `go vet ./...` | `$TYPECHECK_CMD` |
+| Lint command | `"lint"` script; `eslint`; `clippy`; `golangci-lint` | `$LINT_CMD` |
+| Project conventions | `CLAUDE.md`, `.cursor/rules`, `.github/copilot-instructions.md`, `CONVENTIONS.md` | Read + follow |
+| Existing worktrees | `git worktree list` | Avoid name conflicts |
+
+### Agent / Automation Detection
+
+Check for anything that reacts to file changes or git events on main:
+
+| Agent type | Detection | Implication |
+|------------|-----------|-------------|
+| HTTP API agent (Kuro, custom) | `curl -sf "${AGENT_URL:-http://localhost:3001}/status"` or `curl -sf "${AGENT_URL:-http://localhost:3001}/health"` | Pause before merge, resume after |
+| File watcher / auto-commit | `ps aux \| grep -i "fswatch\|watchman\|nodemon\|chokidar"` or `launchctl list \| grep agent` | Worktree mandatory |
+| Git hooks (post-commit, pre-push) | Check `.git/hooks/` and `.husky/` | Be aware of side effects |
+| CI on push | `.github/workflows/`, `.gitlab-ci.yml`, `Jenkinsfile` | Push triggers CI — verify before push |
+| Other AI agents | `ps aux \| grep -i "cursor\|copilot\|aider\|continue"` | Worktree mandatory to avoid conflicts |
+
+**Rule:** If any automation is detected that reacts to file changes on main → worktree is mandatory regardless of task count.
+
+Store detected agents as `$DETECTED_AGENTS` for use in merge phase.
+
+---
+
+## Phase 1: Intelligent Plan Analysis
+
+Read the plan file. Auto-detect task structure (headings, numbered lists, checkboxes — don't require a specific format).
+
+### For each task, determine:
+
+1. **Files touched** — create new vs modify existing? Read existing files to understand complexity.
+2. **Dependencies** — does this task import/use output from another task? Shared types? Call sites?
+3. **Uncertainty** — is the code complete in the plan, or does it say "find and update"?
+4. **Scope** — how many files, how many lines of change?
+
+### Build Dependency DAG
+
+```
+Task 1 (no deps)     Task 3 (no deps)
+    |                     |
+    v                     v
+Task 2 (needs #1)    Task 4 (needs #1 + #3)
+    |                     |
+    +----------+----------+
+               |
+               v
+           Task 5 (needs #2 + #4)
+```
+
+Tasks at the same dependency level with no shared dependencies can run simultaneously.
+
+### Classify by reasoning
+
+| Signal | Points toward |
+|--------|---------------|
+| Creates new file + plan has complete code | **Parallel** |
+| Creates new file + plan is vague | **Subagent** |
+| Modifies existing file (any complexity) | **Subagent** |
+| Depends on previous task's output | **Subagent** (must be sequential) |
+| < 10 lines, single file, no ambiguity | **Direct** |
+| Independent test file with clear spec | **Parallel** |
+| First task of a new pattern | **Subagent** (once proven, upgrade similar tasks) |
+
+### Present classification table
+
+```
+| # | Task | Mode | Reason | Depends On |
+|---|------|------|--------|------------|
+| 1 | Validation helper | Parallel | New file, complete spec | — |
+| 2 | Update registration | Subagent | Modifies existing fn | #1 |
+| 3 | Add tests | Parallel | Independent test file | #1 |
+
+Execution order:
+  Level 0: #1 (Parallel)
+  Level 1: #2 (Subagent) + #3 (Parallel) — simultaneously after #1 completes
+
+Detected: TypeScript project, pnpm build/test, no agents detected.
+Worktree: ../project-dev (feature/my-feature)
+
+Proceed? (y/n)
+```
+
+**User confirms or overrides before proceeding.**
+
+---
 
 ## Phase 2: Isolate
-
-**Always create a worktree for 3+ task plans or any plan modifying existing code.**
 
 ```bash
 FEATURE_NAME=$(basename "$PLAN_FILE" .md)
@@ -93,104 +180,141 @@ git worktree add "$WORKTREE_DIR" -b "$BRANCH"
 # All work happens in the worktree from here
 ```
 
-Skip worktree only for: 1-2 trivial Direct tasks that create new files only.
+**Skip worktree only when ALL of these are true:**
+- 1-2 tasks only
+- All Direct classification
+- All create new files (no modifications)
+- No agents or automation detected
 
-**Agent detection (optional enhancement):**
-If `$AGENT_URL` is set (or defaults to `http://localhost:3001`), check if an auto-commit agent is running. If yes, worktree is mandatory regardless of task count.
+---
 
-## Phase 3: Execute
+## Phase 3: Adaptive Execution
 
-### Phase A: Subagent Tasks (Sequential)
+Execute tasks **respecting the dependency DAG**. Strategy depends on detected LLM capabilities.
 
-Run uncertain tasks one at a time with full review cycle:
+### Execution Strategy by LLM Capability
 
-1. **Dispatch implementer subagent** — provide full task text + context from plan
+**Full capability (Claude Code — default):**
+
+Uses Claude Code's `Agent` tool for both Subagent and Parallel modes. This is the optimized path.
+
+| Mode | Claude Code tool | Isolation |
+|------|-----------------|-----------|
+| Subagent | `Agent` tool (sequential, single instance) | Shares worktree |
+| Parallel | Multiple `Agent` tool calls (simultaneous, up to 4) | Each gets `isolation: "worktree"` |
+| Direct | Inline (no tool) | Current worktree |
+
+Two-stage review for Subagent tasks also uses `Agent` tool — one agent implements, separate agents review.
+
+**Partial capability (other LLMs with shell but no subagent spawn):**
+
+All tasks execute sequentially. Classification still matters for review depth:
+
+| Classification | Execution | Review |
+|----------------|-----------|--------|
+| Was-Subagent | Sequential, self-review carefully before proceeding | Run verification after each task |
+| Was-Parallel | Sequential, but can batch file writes | Run verification after batch |
+| Direct | Inline | Verify at end |
+
+**Minimal capability (shell only, no file editing tools):**
+
+Use shell commands (`cat`, `sed`, `echo >>`) for file operations. Sequential execution. Full verification protocol still applies.
+
+### Subagent Tasks — Full Detail (Claude Code)
+
+1. **Dispatch implementer subagent** via `Agent` tool — provide full task text + relevant file contents + project conventions
 2. **Subagent implements** — explores, asks questions, writes code + tests, self-reviews
-3. **Spec compliance review** — does code match what the plan asked for?
-4. **Code quality review** — clean code, no bugs, proper error handling?
-5. **Fix loop** — if either review finds issues, implementer fixes, reviewer re-reviews
+3. **Dispatch spec compliance reviewer** via `Agent` tool — does code match what the plan asked for?
+4. **Dispatch code quality reviewer** via `Agent` tool — clean code, follows project conventions, no bugs?
+5. **Fix loop** — if either review finds issues, dispatch fix agent, then re-review
 6. **Mark complete** — move to next task
 
-### Phase B: Parallel Tasks (Simultaneous)
+### Parallel Tasks — Full Detail (Claude Code)
 
-Run certain tasks in parallel using Agent tool with `isolation: "worktree"`:
-- Each agent gets: complete task spec + file paths + test requirements
+- Dispatch multiple `Agent` tool calls simultaneously (respect `Max parallel` from Phase 0)
+- Each agent gets: complete task spec + file paths + project conventions + test requirements
 - Agents work independently, no shared state
 - Collect all results, verify each passes tests
-- Merge all into dev worktree
 
-### Phase C: Direct Tasks (Inline)
+### Direct Tasks (All LLMs)
 
 Execute trivially yourself. No subagent overhead.
 
-### Adaptive Re-classification
+### Real-Time Adaptation
 
 Modes can change during execution based on evidence:
 
 | Observation | Action |
 |-------------|--------|
-| Subagent completes easily, no questions asked | Upgrade similar remaining tasks to Parallel |
-| Subagent asks many questions or hits complications | Keep remaining similar tasks as Subagent |
-| Parallel agent fails or produces bad code | Downgrade remaining similar tasks to Subagent |
-| Direct change causes unexpected test failure | Escalate to Subagent for investigation |
+| Subagent completes easily, no questions | Upgrade similar remaining tasks → Parallel |
+| Subagent asks many questions / hits complications | Keep similar remaining tasks as Subagent |
+| Parallel agent fails or produces bad code | Downgrade similar remaining tasks → Subagent |
+| Direct change causes test failure | Escalate → Subagent |
+| Task reveals new dependency not in plan | Re-order remaining tasks |
+| Verification command differs from detected | Update project profile |
+
+---
 
 ## Phase 4: Verify
 
-**In the worktree, run full verification. Zero tolerance — must pass before merge.**
+**Use the commands detected in Phase 0. Do not hardcode.**
 
 ```bash
-# Detect and run project's verification commands
-# TypeScript/JavaScript:
-pnpm typecheck 2>/dev/null || npm run typecheck 2>/dev/null || npx tsc --noEmit 2>/dev/null
-pnpm test 2>/dev/null || npm test 2>/dev/null || npx vitest run 2>/dev/null
-
-# Python:
-# python -m pytest
-# mypy .
-
-# Go:
-# go build ./...
-# go test ./...
-
-# Rust:
-# cargo check
-# cargo test
+$BUILD_CMD       # Compile / bundle
+$TYPECHECK_CMD   # Type checking
+$TEST_CMD        # Run tests
+$LINT_CMD        # Lint (if available)
 ```
 
-Adapt to the project's actual build/test commands. If unsure, check `package.json`, `Makefile`, `Cargo.toml`, etc.
+**Zero tolerance — all must pass before merge.**
 
-**If verification fails:** Fix in the worktree. Do NOT proceed to merge.
+If verification fails: fix in the worktree. Do NOT proceed to merge.
 
-## Phase 5: Merge
+---
 
-### Safe Merge Protocol
+## Phase 5: Safe Merge
+
+### Pre-merge checks
 
 ```bash
-# 1. (If agent detected) Pause agent to prevent trigger storm
-AGENT_URL="${AGENT_URL:-http://localhost:3001}"
-curl -sf -X POST "$AGENT_URL/loop/pause" 2>/dev/null  # Silent fail if no agent
+# 1. Pause all detected agents
+for AGENT in $DETECTED_AGENTS; do
+  curl -sf -X POST "$AGENT/loop/pause" 2>/dev/null
+done
 
-# 2. Merge feature branch into main
+# 2. Check agent has no active background tasks (if applicable)
+# curl -sf "$AGENT_URL/status" → check active delegations
+```
+
+### Merge
+
+```bash
 cd /path/to/main/worktree
 git merge --no-ff "$BRANCH" -m "[forge] feat: <plan summary>"
+```
 
-# 3. Verify on main (catches merge-induced issues)
-# Run same verification commands as Phase 4
+### Post-merge verification
 
-# 4. Clean up worktree + branch
+```bash
+# Run same verification as Phase 4 — catches merge-induced issues
+$BUILD_CMD && $TYPECHECK_CMD && $TEST_CMD
+```
+
+### Clean up
+
+```bash
 git worktree remove "$WORKTREE_DIR"
 git branch -d "$BRANCH"
 
-# 5. (If agent detected) Resume agent
-curl -sf -X POST "$AGENT_URL/loop/resume" 2>/dev/null
+# Resume all detected agents
+for AGENT in $DETECTED_AGENTS; do
+  curl -sf -X POST "$AGENT/loop/resume" 2>/dev/null
+done
 ```
 
-### Rollback Plan
+### Rollback
 
-**If merge has conflicts:**
-- Resolve conflicts in main worktree
-- Re-run verification after resolution
-- Do NOT resume agent until verified
+**If merge has conflicts:** resolve in main, re-verify, do NOT resume agents until verified.
 
 **If verification fails after merge:**
 ```bash
@@ -198,13 +322,17 @@ git merge --abort          # If not yet committed
 # OR
 git reset --merge HEAD~1   # If already committed
 
-# Resume agent — main is back to pre-merge state
-curl -sf -X POST "$AGENT_URL/loop/resume" 2>/dev/null
+# Resume agents — main is back to pre-merge state
+for AGENT in $DETECTED_AGENTS; do
+  curl -sf -X POST "$AGENT/loop/resume" 2>/dev/null
+done
 
 # Debug in the worktree (don't delete it)
 ```
 
-**If no agent:** Skip all pause/resume steps. Merge protocol still applies.
+**If no agents detected:** skip all pause/resume. Merge protocol still applies.
+
+---
 
 ## Phase 6: Push
 
@@ -212,40 +340,46 @@ curl -sf -X POST "$AGENT_URL/loop/resume" 2>/dev/null
 git push origin main
 ```
 
+---
+
 ## Conventions
 
-- **`[forge]`** prefix on merge commits — identifies planned merges (agents can filter these)
+- **`[forge]`** prefix on merge commits — identifies planned merges (agents/CI can filter)
 - **`feature/<plan-filename>`** branch naming — traceable to source plan
 - **`../<project>-dev`** worktree location — sibling directory, predictable
-- **`$AGENT_URL`** env var — configurable agent endpoint (optional)
+- **`$AGENT_URL`** env var — override default agent endpoint
 
 ## Red Flags
 
 - **Never skip isolation for multi-task plans** — worktree is cheap, debugging race conditions is not
 - **Never merge without passing verification** — evidence before claims
-- **Never skip the classification table** — user must see and confirm the execution plan
-- **Never resume agent before merge is verified** — agent triggers on partial state
+- **Never skip the classification table** — user must see and confirm
+- **Never resume agents before merge is verified** — agents trigger on partial state
 - **Never force-push feature branches** — worktree refs can break
+- **Never hardcode verification commands** — detect from project config
 
 ## Quick Reference
 
 ```
 /forge plan.md
   |
-  +--> 1-2 trivial new-file-only tasks? -> Direct on main, no worktree
+  +--> [SENSE] Detect language, build/test commands, agents, conventions
+  |
+  +--> [ANALYZE] Read plan → dependency DAG → classify → present table
+  |
+  +--> 1-2 trivial new-file-only + no agents? → Direct on main
   |
   +--> Everything else:
          |
-         +--> Create worktree
-         +--> Classify tasks:
-         |      New file + complete spec? ---------> Parallel
-         |      Modifies existing code? -----------> Subagent
-         |      < 10 lines, single file? ----------> Direct
-         |      Depends on previous task? ---------> Subagent
+         +--> Create worktree + feature branch
+         +--> Execute by dependency level:
+         |      Independent + certain → Parallel
+         |      Uncertain / modifies existing → Subagent
+         |      Trivial → Direct
+         |      Adapt as you go
          |
-         +--> Execute: Subagent first, then Parallel, then Direct
-         +--> Verify: typecheck + tests
-         +--> Merge: [forge] commit, verify again, clean up
+         +--> Verify: $BUILD_CMD + $TYPECHECK_CMD + $TEST_CMD
+         +--> Merge: pause agents → [forge] commit → verify on main → clean up → resume
          +--> Push
 ```
 
@@ -255,37 +389,44 @@ git push origin main
 ```
 > /forge docs/plans/add-helper.md
 
-2 tasks found. All trivial new files.
-| # | Task | Mode | Reason |
-|---|------|------|--------|
-| 1 | Add util function | Direct | New file, 15 lines |
-| 2 | Add tests | Direct | Test file only |
+[SENSE] TypeScript project. Build: pnpm build. Test: pnpm test. No agents detected.
 
-Working directly on main (trivial new files only).
+2 tasks found. All trivial new files.
+| # | Task | Mode | Reason | Depends On |
+|---|------|------|--------|------------|
+| 1 | Add util function | Direct | New file, 15 lines | — |
+| 2 | Add tests | Direct | Test file only | #1 |
+
+No agents detected. Trivial new files only. Working directly on main.
 [executes]
 Typecheck: EXIT 0. Tests: 42/42 pass.
+Pushed.
 ```
 
 **Complex (full forge workflow):**
 ```
 > /forge docs/plans/context-optimization.md
 
+[SENSE] TypeScript project. Build: pnpm build. Test: pnpm test.
+        Typecheck: pnpm typecheck. Agent detected at localhost:3001 (Kuro).
+
 6 tasks found.
 
-| # | Task | Mode | Reason |
-|---|------|------|--------|
-| 1 | FTS5 smart loading | Subagent | Modifies existing function |
-| 2 | Trail dedup | Parallel | New export, complete spec |
-| 3 | Auto-demotion | Subagent | New module + 3-file integration |
-| 4 | Haiku pruning | Parallel | New file, complete spec |
-| 5 | Cold storage | Parallel | Clear spec, independent |
-| 6 | Health telemetry | Direct | 5 lines in 2 files |
+| # | Task | Mode | Reason | Depends On |
+|---|------|------|--------|------------|
+| 1 | FTS5 smart loading | Subagent | Modifies existing function | — |
+| 2 | Trail dedup | Parallel | New export, complete spec | — |
+| 3 | Auto-demotion | Subagent | New module + 3-file integration | #1 |
+| 4 | Haiku pruning | Parallel | New file, complete spec | — |
+| 5 | Cold storage | Parallel | Clear spec, independent | — |
+| 6 | Health telemetry | Direct | 5 lines in 2 files | #1, #3 |
+
+Execution order:
+  Level 0: #1 (Subagent), #2 (Parallel), #4 (Parallel), #5 (Parallel)
+  Level 1: #3 (Subagent, needs #1)
+  Level 2: #6 (Direct, needs #1 + #3)
 
 Creating worktree: ../project-dev (feature/context-optimization)
-
-Phase A: Subagent (1, 3) — sequential with two-stage review
-Phase B: Parallel (2, 4, 5) — simultaneous
-Phase C: Direct (6) — inline
 
 Proceed? (y/n)
 ```
