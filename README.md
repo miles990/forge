@@ -1,14 +1,18 @@
 # Forge
 
-One command. AI reads your plan, classifies tasks, isolates in a worktree, executes with optimal strategy, verifies, and merges. You watch.
+One command. Your AI reads the plan, classifies tasks, isolates in a worktree, executes with optimal strategy, verifies, and merges. You watch.
+
+Works with **Claude Code**, **OpenClaw**, **Cursor**, **Windsurf**, **Aider**, and any LLM that can read files + run shell commands.
 
 > **Why "Forge"?** Named by [Kuro](https://kuro.page) (an autonomous AI agent). The metaphor: raw material (plan) goes into the forge, finished product (working code) comes out. The process inside is isolated, hot, and transformative — you don't reach in while it's working.
 
 ```bash
+# Claude Code
 /forge docs/plans/my-feature.md
+/forge docs/plans/my-feature.md --yolo   # full auto
 
-# Full auto — no confirmation, just go
-/forge docs/plans/my-feature.md --yolo
+# Any other LLM — include SKILL.md in context, then:
+# "Follow the forge workflow to execute docs/plans/my-feature.md"
 ```
 
 ## What Happens
@@ -43,102 +47,84 @@ You confirm the classification table. Everything else is automated.
 
 ## Install
 
-### Claude Code (recommended)
+### Quick install (auto-detects platform)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/install.sh | bash
+```
+
+Automatically detects Claude Code, OpenClaw, Cursor, Windsurf, Continue.dev and installs to the right place.
+
+### Claude Code
 
 ```bash
 # From the marketplace
 claude plugin:add forge --marketplace github:miles990/forge
-```
 
-Or manually:
-
-```bash
-git clone https://github.com/miles990/forge.git
-cp -r forge/forge ~/.claude/plugins/
+# Or manually
+curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/install.sh | bash
 ```
 
 After installation, `/forge` is available in any Claude Code session.
 
-### Cursor
-
-Copy the skill into Cursor's rules directory:
-
-```bash
-git clone https://github.com/miles990/forge.git
-cp forge/forge/1.0.0/skills/forge/SKILL.md .cursor/rules/forge.md
-```
-
-Then tell Cursor: "Follow the forge workflow in .cursor/rules/forge.md to execute my-plan.md"
-
-### Windsurf / Continue.dev
-
-```bash
-git clone https://github.com/miles990/forge.git
-# Add to your rules/context directory
-cp forge/forge/1.0.0/skills/forge/SKILL.md .windsurfrules/forge.md
-# Or for Continue.dev:
-cp forge/forge/1.0.0/skills/forge/SKILL.md .continue/rules/forge.md
-```
-
 ### OpenClaw
 
-Forge can be loaded as an OpenClaw skill:
-
 ```bash
-git clone https://github.com/miles990/forge.git
+# Auto-install
+curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/install.sh | bash
 
-# Copy into OpenClaw's custom skills directory
-cp forge/forge/1.0.0/skills/forge/SKILL.md ~/.openclaw/custom_skills/forge.md
+# Or manually
+curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/forge/1.0.0/skills/forge/SKILL.md \
+  -o ~/.openclaw/custom_skills/forge.md
 ```
 
-Or reference directly in your OpenClaw workspace:
+Then tell your agent: "Use the forge skill to execute my-plan.md"
+
+> Forge auto-detects OpenClaw's tool environment and adapts. Subagent spawning depends on your OpenClaw configuration.
+
+### Cursor / Windsurf / Continue.dev
 
 ```bash
-cp forge/forge/1.0.0/skills/forge/SKILL.md workspace/skills/forge.md
-```
+# Auto-install (detects your editor)
+curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/install.sh | bash
 
-Then in your OpenClaw conversation: "Use the forge skill to execute my-plan.md"
-
-> **Note:** OpenClaw agents have file read/write and shell execution capabilities. Forge will auto-detect OpenClaw's tool execution environment and adapt accordingly. Subagent spawning depends on your OpenClaw configuration.
-
-### Aider
-
-```bash
-git clone https://github.com/miles990/forge.git
-# Use as a prompt file
-aider --read forge/forge/1.0.0/skills/forge/SKILL.md
+# Or manually — pick your editor:
+curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/forge/1.0.0/skills/forge/SKILL.md \
+  -o .cursor/rules/forge.md          # Cursor
+  # .windsurfrules/forge.md          # Windsurf
+  # .continue/rules/forge.md         # Continue.dev
 ```
 
 Then: "Follow the forge workflow to execute my-plan.md"
 
-### Custom AI Agents
-
-If you're building your own agent (like [mini-agent](https://github.com/miles990/mini-agent)), include SKILL.md in your agent's skill loading pipeline:
+### Aider
 
 ```bash
-git clone https://github.com/miles990/forge.git
-cp forge/forge/1.0.0/skills/forge/SKILL.md your-agent/skills/forge.md
+curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/forge/1.0.0/skills/forge/SKILL.md \
+  -o forge.md
+aider --read forge.md
 ```
 
-Your agent can load it as a skill definition and follow the workflow when a plan execution is requested.
+### Custom AI Agents
+
+For agents like [mini-agent](https://github.com/miles990/mini-agent) or your own:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/forge/1.0.0/skills/forge/SKILL.md \
+  -o your-agent/skills/forge.md
+```
 
 ### Any LLM with shell access
 
-The core of Forge is a single markdown file: `forge/1.0.0/skills/forge/SKILL.md`. It contains the complete workflow specification. Any LLM that can:
-
-1. **Read files** — to read the plan and existing code
-2. **Execute shell commands** — to run git, build, test commands
-
-...can follow Forge. Just include SKILL.md in your LLM's context/system prompt and point it at your plan file.
+Forge is a single markdown file. Any LLM that can read files + run shell commands can use it:
 
 ```bash
-git clone https://github.com/miles990/forge.git
+# Download the skill
+curl -fsSL https://raw.githubusercontent.com/miles990/forge/main/forge/1.0.0/skills/forge/SKILL.md \
+  -o forge.md
 
-# Option A: Copy into your project
-cp forge/forge/1.0.0/skills/forge/SKILL.md docs/forge-workflow.md
-
-# Option B: Reference directly in your prompt
-cat forge/forge/1.0.0/skills/forge/SKILL.md | your-llm-cli --system-prompt -
+# Include in your LLM's context
+cat forge.md | your-llm-cli --system-prompt -
 ```
 
 ## Usage
