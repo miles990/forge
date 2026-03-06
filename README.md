@@ -92,8 +92,8 @@ Yolo mode keeps all safety nets (worktree isolation, verification gates, rollbac
 
 ## Requirements
 
+- **Git** — forge uses worktrees for isolation
 - Any AI coding assistant that can read files and execute shell commands
-- Git repository (forge uses worktrees for isolation)
 
 ## Install
 
@@ -155,10 +155,7 @@ rm forge.md                        # Aider / generic
 | Platform | How to invoke |
 |----------|---------------|
 | **Claude Code** | `/forge plan.md` or `/forge "description"` |
-| **OpenClaw** | "Use the forge skill to execute plan.md" |
-| **Cursor / Windsurf** | "Follow the forge workflow to execute plan.md" |
-| **Aider** | "Follow the forge workflow in forge.md to execute plan.md" |
-| **Any LLM** | "Follow the forge workflow to: [your description]" |
+| **Other LLMs** | "Follow the forge workflow to execute plan.md" or "Follow the forge workflow to: [description]" |
 
 ### 1. Write a plan (or let AI write it)
 
@@ -324,6 +321,20 @@ PUSH    → git push origin main
 - **Any language** — TypeScript, Python, Go, Rust, etc.
 - **With or without automation** — auto-detects file watchers, CI, AI agents → uses worktree isolation
 - **Any plan format** — reads task structure from markdown plans
+
+## FAQ
+
+**What is Forge?**
+Forge is a plan execution tool for AI coding assistants. It takes an implementation plan (or a natural language description), classifies tasks by complexity, isolates work in a git worktree, executes tasks with the optimal strategy (parallel, sequential, or inline), and only merges to main after all verification passes.
+
+**Does Forge only work with Claude Code?**
+No. Forge is a single markdown file that any LLM can follow — Claude Code, Cursor, Windsurf, Aider, OpenClaw, or any AI with shell access. Claude Code gets the best experience (native `/forge` command + parallel subagents), but the core workflow (isolation, verification, merge) works everywhere.
+
+**Is Forge an AI agent?**
+No. Forge is a workflow specification (a skill/prompt) that runs inside your existing AI assistant. It doesn't have its own model, runtime, or API. Think of it as a discipline layer — your AI already knows how to write code, forge teaches it how to execute a multi-task plan safely.
+
+**How is Forge different from Devin / SWE-agent?**
+Devin and SWE-agent are full AI agents with their own environments. Forge is lightweight — a single markdown file that augments your existing AI assistant. No setup, no infrastructure, no monthly fee.
 
 ## License
 
