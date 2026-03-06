@@ -210,6 +210,20 @@ Confirm or override, then forge handles everything else:
 
 Classification adapts during execution — if a subagent task completes easily, similar remaining tasks upgrade to parallel.
 
+## If Something Goes Wrong
+
+Forge works in a git worktree on a feature branch. **Main is never touched until everything passes.** If something breaks mid-execution, your main branch is exactly where it was.
+
+| Scenario | What happens |
+|----------|-------------|
+| **Tests fail** | Forge fixes in the worktree and retries. Won't merge until all pass. |
+| **Merge conflict** | Forge resolves in main, re-verifies before completing. |
+| **Verification fails after merge** | Auto-rollback: `git reset --merge HEAD~1`. Main restored. |
+| **Forge crashes / you ctrl-C** | Worktree stays on disk. Resume manually or clean up: `git worktree remove ../project-forge-*` |
+| **Wrong plan / bad output** | Nothing reached main. Delete the worktree, fix the plan, re-run. |
+
+The worktree is your safety net — it's just a directory. You can inspect it, fix things manually, or delete it. Main stays clean until forge explicitly merges.
+
 ## Configuration
 
 ### Conventions
