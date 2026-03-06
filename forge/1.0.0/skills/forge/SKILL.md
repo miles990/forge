@@ -1,7 +1,7 @@
 ---
 name: forge
 description: Isolated, high-quality, high-efficiency plan execution. Environment-aware, dependency-driven, adaptive. Use when you have an implementation plan to execute.
-jit_keywords: forge, execute plan, run plan, implement plan, worktree, isolated execution
+jit_keywords: forge, /forge
 ---
 
 # Forge
