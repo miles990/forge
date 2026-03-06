@@ -1,6 +1,7 @@
 ---
 name: forge
 description: Isolated, high-quality, high-efficiency plan execution. Environment-aware, dependency-driven, adaptive. Use when you have an implementation plan to execute.
+jit_keywords: forge, execute plan, run plan, implement plan, worktree, isolated execution
 ---
 
 # Forge
@@ -89,6 +90,7 @@ Capability profile:
 | Lint command | `"lint"` script; `eslint`; `clippy`; `golangci-lint` | `$LINT_CMD` |
 | Project conventions | `CLAUDE.md`, `.cursor/rules`, `.github/copilot-instructions.md`, `CONVENTIONS.md` | Read + follow |
 | Existing worktrees | `git worktree list` | Avoid name conflicts |
+| Stale forge worktrees | `git worktree list \| grep -- '-dev'` | Prompt user to clean up before creating new one |
 
 ### Agent / Automation Detection
 
@@ -104,7 +106,27 @@ Check for anything that reacts to file changes or git events on main:
 
 **Rule:** If any automation is detected that reacts to file changes on main → worktree is mandatory regardless of task count.
 
-Store detected agents as `$DETECTED_AGENTS` for use in merge phase.
+### Multi-Agent Discovery
+
+To build `$DETECTED_AGENTS` (list of agent URLs to pause/resume during merge):
+
+```bash
+# 1. Check explicit env var
+if [ -n "$AGENT_URL" ]; then AGENTS+=("$AGENT_URL"); fi
+
+# 2. Scan common ports for HTTP API agents
+for PORT in 3001 3002 3003 8001 8080; do
+  if curl -sf "http://localhost:$PORT/health" >/dev/null 2>&1; then
+    AGENTS+=("http://localhost:$PORT")
+  fi
+done
+
+# 3. Check project config for agent URLs
+# Look in: .env, .env.local, docker-compose.yml, agent-compose.yaml
+grep -h 'AGENT_URL\|agent.*url\|localhost:[0-9]' .env* 2>/dev/null
+```
+
+Store all discovered agents as `$DETECTED_AGENTS`. Merge phase iterates over all of them.
 
 ---
 
@@ -201,10 +223,12 @@ Uses Claude Code's `Agent` tool for both Subagent and Parallel modes. This is th
 | Mode | Claude Code tool | Isolation |
 |------|-----------------|-----------|
 | Subagent | `Agent` tool (sequential, single instance) | Shares worktree |
-| Parallel | Multiple `Agent` tool calls (simultaneous, up to 4) | Each gets `isolation: "worktree"` |
+| Parallel | Multiple `Agent` tool calls (simultaneous, up to 4) | Each gets `isolation: "worktree"` (see note) |
 | Direct | Inline (no tool) | Current worktree |
 
 Two-stage review for Subagent tasks also uses `Agent` tool — one agent implements, separate agents review.
+
+> **Parallel isolation note:** When using Claude Code's `Agent` tool with `isolation: "worktree"`, each parallel agent gets its own temporary worktree branched from the feature branch. Claude Code manages the creation, execution, and merge of these sub-worktrees internally. For other LLMs without this built-in mechanism, parallel tasks should share the feature worktree and be carefully ordered to avoid file conflicts.
 
 **Partial capability (other LLMs with shell but no subagent spawn):**
 
@@ -290,7 +314,8 @@ done
 
 ```bash
 cd /path/to/main/worktree
-git merge --no-ff "$BRANCH" -m "[forge] feat: <plan summary>"
+git merge --no-ff "$BRANCH" -m "[forge] <type>: <plan summary>"
+# <type> inferred from plan content: feat (new feature), fix (bug fix), refactor, docs, chore
 ```
 
 ### Post-merge verification
@@ -327,10 +352,28 @@ for AGENT in $DETECTED_AGENTS; do
   curl -sf -X POST "$AGENT/loop/resume" 2>/dev/null
 done
 
-# Debug in the worktree (don't delete it)
+# Debug in the worktree (don't delete it yet)
 ```
 
 **If no agents detected:** skip all pause/resume. Merge protocol still applies.
+
+### Stale Worktree Cleanup
+
+Failed forge runs may leave behind worktrees. At the start of every `/forge` invocation (Phase 0), check for stale forge worktrees:
+
+```bash
+# List forge-created worktrees (pattern: *-dev)
+git worktree list | grep -- '-dev'
+```
+
+If stale worktrees exist, prompt the user:
+```
+Found stale worktree: ../project-dev (feature/old-plan)
+  - Clean up and remove? (y/n)
+  - Or keep for debugging?
+```
+
+Do not silently delete — the user may be debugging a previous failure.
 
 ---
 

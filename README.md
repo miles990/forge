@@ -35,27 +35,108 @@ You confirm the classification table. Everything else is automated.
 
 ## Requirements
 
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed and authenticated
+- Any AI coding assistant that can read files and execute shell commands
 - Git repository (forge uses worktrees for isolation)
 
 ## Install
 
+### Claude Code (recommended)
+
 ```bash
-# From the Claude Code marketplace
+# From the marketplace
 claude plugin:add forge --marketplace github:miles990/forge
 ```
 
-Or install manually:
+Or manually:
 
 ```bash
-# Clone the repo
 git clone https://github.com/miles990/forge.git
-
-# Copy the plugin into your Claude Code plugins directory
 cp -r forge/forge ~/.claude/plugins/
 ```
 
-After installation, the `/forge` command is available in any Claude Code session.
+After installation, `/forge` is available in any Claude Code session.
+
+### Cursor
+
+Copy the skill into Cursor's rules directory:
+
+```bash
+git clone https://github.com/miles990/forge.git
+cp forge/forge/1.0.0/skills/forge/SKILL.md .cursor/rules/forge.md
+```
+
+Then tell Cursor: "Follow the forge workflow in .cursor/rules/forge.md to execute my-plan.md"
+
+### Windsurf / Continue.dev
+
+```bash
+git clone https://github.com/miles990/forge.git
+# Add to your rules/context directory
+cp forge/forge/1.0.0/skills/forge/SKILL.md .windsurfrules/forge.md
+# Or for Continue.dev:
+cp forge/forge/1.0.0/skills/forge/SKILL.md .continue/rules/forge.md
+```
+
+### OpenClaw
+
+Forge can be loaded as an OpenClaw skill:
+
+```bash
+git clone https://github.com/miles990/forge.git
+
+# Copy into OpenClaw's custom skills directory
+cp forge/forge/1.0.0/skills/forge/SKILL.md ~/.openclaw/custom_skills/forge.md
+```
+
+Or reference directly in your OpenClaw workspace:
+
+```bash
+cp forge/forge/1.0.0/skills/forge/SKILL.md workspace/skills/forge.md
+```
+
+Then in your OpenClaw conversation: "Use the forge skill to execute my-plan.md"
+
+> **Note:** OpenClaw agents have file read/write and shell execution capabilities. Forge will auto-detect OpenClaw's tool execution environment and adapt accordingly. Subagent spawning depends on your OpenClaw configuration.
+
+### Aider
+
+```bash
+git clone https://github.com/miles990/forge.git
+# Use as a prompt file
+aider --read forge/forge/1.0.0/skills/forge/SKILL.md
+```
+
+Then: "Follow the forge workflow to execute my-plan.md"
+
+### Custom AI Agents
+
+If you're building your own agent (like [mini-agent](https://github.com/miles990/mini-agent)), include SKILL.md in your agent's skill loading pipeline:
+
+```bash
+git clone https://github.com/miles990/forge.git
+cp forge/forge/1.0.0/skills/forge/SKILL.md your-agent/skills/forge.md
+```
+
+Your agent can load it as a skill definition and follow the workflow when a plan execution is requested.
+
+### Any LLM with shell access
+
+The core of Forge is a single markdown file: `forge/1.0.0/skills/forge/SKILL.md`. It contains the complete workflow specification. Any LLM that can:
+
+1. **Read files** — to read the plan and existing code
+2. **Execute shell commands** — to run git, build, test commands
+
+...can follow Forge. Just include SKILL.md in your LLM's context/system prompt and point it at your plan file.
+
+```bash
+git clone https://github.com/miles990/forge.git
+
+# Option A: Copy into your project
+cp forge/forge/1.0.0/skills/forge/SKILL.md docs/forge-workflow.md
+
+# Option B: Reference directly in your prompt
+cat forge/forge/1.0.0/skills/forge/SKILL.md | your-llm-cli --system-prompt -
+```
 
 ## Usage
 
@@ -93,7 +174,9 @@ Forge analyzes each task and presents a classification table:
 | 2 | Update registration     | Subagent  | Modifies existing function  |
 | 3 | Add tests               | Parallel  | Independent test file       |
 
-Execution order: Phase A (Subagent: #2) -> Phase B (Parallel: #1, #3)
+Execution order:
+  Level 0: #1 (Parallel, no deps)
+  Level 1: #2 (Subagent, needs #1) + #3 (Parallel, needs #1)
 
 Proceed? (y/n)
 ```
@@ -137,12 +220,15 @@ Classification adapts during execution — if a subagent task completes easily, 
 
 Forge works with any LLM that can read files and execute shell commands. Default optimized for **Claude Code (Anthropic)**.
 
-| LLM | Subagent | Parallel | Worktree | Notes |
-|-----|----------|----------|----------|-------|
+| LLM / Platform | Subagent | Parallel | Worktree | Notes |
+|----------------|----------|----------|----------|-------|
 | **Claude Code** (default) | `Agent` tool | Up to 4 simultaneous | Full support | Optimized path — two-stage review via separate agents |
+| OpenClaw | Skill execution | Depends on config | Full support | Load as custom skill, adapts to OpenClaw's tool environment |
 | Cursor | Background agents | Limited | Full support | Use Cursor's agent dispatch |
+| Windsurf / Continue.dev | Depends | Depends | Full support | Load as rules file |
 | Aider | No | No | Full support | All tasks run sequential, verification still applies |
 | Copilot CLI | No | No | Full support | Sequential execution |
+| Custom agents (mini-agent, etc.) | Depends | Depends | Full support | Include SKILL.md in agent's skill pipeline |
 | Any LLM + shell | Depends | Depends | `git worktree` | Auto-detects capabilities at runtime |
 
 **Key principle:** When subagent spawn is unavailable, all tasks execute sequentially. The isolation + verification + merge protocol never degrades — quality gates are LLM-independent.
@@ -153,151 +239,21 @@ Forge works with any LLM that can read files and execute shell commands. Default
 /forge <path-to-plan.md>
 ```
 
-**Input:** Any markdown file with task-like structure (headings, numbered lists, checkboxes — forge auto-detects the format).
+**Input:** Any markdown file with task-like structure. **Output:** Verified code merged to main and pushed.
 
-**Output:** Working, verified code merged to main and pushed.
-
-### Phase 0: Environment Sensing
-
-Before touching any code, **sense your own capabilities and the project environment**:
+### Quick Reference
 
 ```
-0. Detect LLM capabilities   → Can spawn subagents? Max parallelism? Worktree support?
-1. Detect language/framework  → package.json? Cargo.toml? go.mod? pyproject.toml? Makefile?
-2. Detect build command       → "build" script in package.json? `make build`? `cargo build`?
-3. Detect test command        → "test" script? `pytest`? `go test`? `cargo test`?
-4. Detect typecheck command   → `tsc --noEmit`? `mypy`? `go vet`?
-5. Detect auto-commit agent   → curl -sf "$AGENT_URL/status" (default http://localhost:3001)
-6. Detect existing worktrees  → git worktree list (avoid conflicts)
-7. Read CLAUDE.md / .cursor/* → project-specific conventions, naming, test patterns
+SENSE  → detect LLM capabilities + project env + agents + stale worktrees
+ANALYZE → read plan → dependency DAG → classify → present table → user confirms
+ISOLATE → git worktree + feature branch
+EXECUTE → Subagent (uncertain) → Parallel (certain) → Direct (trivial), adapt in real-time
+VERIFY  → $BUILD_CMD + $TYPECHECK_CMD + $TEST_CMD (zero tolerance)
+MERGE   → pause agents → [forge] <type>: <summary> → verify on main → cleanup → resume
+PUSH    → git push origin main
 ```
 
-Store these as your **project profile** — use it for every decision below. Don't guess what works; detect it.
-
-### Phase 1: Intelligent Plan Analysis
-
-Read the plan. For each task, build a **dependency graph** and **uncertainty score**:
-
-```
-For each task:
-  1. What files does it touch? (create vs modify)
-  2. Does it depend on output from another task? (import, call site, shared type)
-  3. How much is specified? (complete code → low uncertainty, "find and fix" → high)
-  4. Does the target file exist? If yes, how complex? (read it, count lines/functions)
-```
-
-Then classify — not by rigid rules, but by reasoning:
-
-| Signal | Points toward |
-|--------|---------------|
-| Creates new file + plan has complete code | Parallel |
-| Creates new file + plan is vague | Subagent |
-| Modifies existing file (any complexity) | Subagent |
-| Depends on previous task's output | Subagent (sequential) |
-| < 10 lines, single file, no ambiguity | Direct |
-| Independent test file with clear spec | Parallel |
-
-**Build the dependency DAG.** Tasks with no dependencies on each other can be parallelized. Tasks with dependencies must be sequential regardless of classification.
-
-Present to user:
-
-```
-| # | Task | Mode | Reason | Depends On |
-|---|------|------|--------|------------|
-| 1 | Validation helper | Parallel | New file, complete spec | — |
-| 2 | Update registration | Subagent | Modifies existing fn | #1 |
-| 3 | Add tests | Parallel | Independent test file | #1 |
-
-Execution order:
-  Phase A: #1 (Parallel, no deps)
-  Phase B: #2 (Subagent, needs #1), #3 (Parallel, needs #1) — can run simultaneously
-```
-
-Wait for user confirmation before proceeding.
-
-### Phase 2: Isolation
-
-```bash
-FEATURE_NAME=$(basename "$PLAN_FILE" .md)
-BRANCH="feature/$FEATURE_NAME"
-WORKTREE_DIR="../$(basename $PWD)-dev"
-git worktree add "$WORKTREE_DIR" -b "$BRANCH"
-```
-
-**Skip worktree only when:** 1-2 Direct tasks that create new files only AND no auto-commit agent detected.
-
-### Phase 3: Adaptive Execution
-
-Execute tasks respecting the dependency DAG. Strategy adapts to LLM capabilities:
-
-**Claude Code (default — optimized path):**
-- **Subagent tasks** — `Agent` tool, sequential, two-stage review (spec compliance → code quality) via separate reviewer agents
-- **Parallel tasks** — multiple `Agent` tool calls simultaneously (up to 4), each with `isolation: "worktree"`
-- **Direct tasks** — inline, no agent overhead
-
-**Other LLMs (no subagent spawn):**
-- All tasks execute sequentially. Classification still determines review depth:
-  - Was-Subagent → run verification after each task, self-review carefully
-  - Was-Parallel → batch where possible, verify after batch
-  - Direct → verify at end
-
-**Adapt in real-time:**
-
-| Observation | Action |
-|-------------|--------|
-| Subagent completes easily, no questions | Upgrade similar remaining tasks → Parallel |
-| Subagent asks many questions / hits complications | Keep similar remaining tasks as Subagent |
-| Parallel agent fails or produces bad code | Downgrade similar remaining tasks → Subagent |
-| Direct change causes test failure | Escalate to Subagent |
-| Task reveals new dependency not in plan | Re-order remaining tasks accordingly |
-| Verification command differs from detected | Update project profile, use correct command going forward |
-
-### Phase 4: Verification
-
-Run the commands detected in Phase 0. **Not hardcoded — use what the project actually uses.**
-
-```bash
-# Use detected commands, e.g.:
-$BUILD_CMD    # pnpm build, cargo build, go build ./..., etc.
-$TYPECHECK_CMD # pnpm typecheck, mypy ., go vet ./..., etc.
-$TEST_CMD     # pnpm test, pytest, go test ./..., cargo test, etc.
-```
-
-**Zero tolerance.** If anything fails, fix in the worktree. Do NOT proceed to merge.
-
-### Phase 5: Safe Merge
-
-```bash
-# 1. Pause agent (if detected)
-curl -sf -X POST "$AGENT_URL/loop/pause" 2>/dev/null
-
-# 2. Check for active delegations (if agent has background tasks, wait or warn)
-ACTIVE=$(curl -sf "$AGENT_URL/status" 2>/dev/null | grep -o '"active":[0-9]*' | head -1)
-
-# 3. Merge
-cd /path/to/main && git merge --no-ff "$BRANCH" -m "[forge] feat: <plan summary>"
-
-# 4. Verify on main (catches merge-induced issues)
-$BUILD_CMD && $TYPECHECK_CMD && $TEST_CMD
-
-# 5. Clean up
-git worktree remove "$WORKTREE_DIR" && git branch -d "$BRANCH"
-
-# 6. Resume agent
-curl -sf -X POST "$AGENT_URL/loop/resume" 2>/dev/null
-```
-
-**Rollback:**
-```bash
-git merge --abort            # If not yet committed
-git reset --merge HEAD~1     # If already committed — then resume agent
-```
-
-### Phase 6: Push
-
-```bash
-git push origin main
-```
+**For the complete workflow specification, see [`SKILL.md`](forge/1.0.0/skills/forge/SKILL.md).** It contains all phases, classification rules, dependency DAG construction, LLM-adaptive execution strategies, agent detection, merge protocol, and rollback procedures.
 
 ### Hard Rules
 
