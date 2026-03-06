@@ -14,12 +14,14 @@
 # Before merge, rebase onto main reduces conflicts from concurrent work.
 #
 # Usage:
-#   forge-lite.sh create <task-name>              → Create worktree + branch
+#   forge-lite.sh create <task-name> [--files "a.ts,b.ts"]  → Create worktree + branch
 #   forge-lite.sh verify <worktree-path>          → Run typecheck + tests
 #   forge-lite.sh merge <worktree-path> [message]  → Merge to main + cleanup
 #   forge-lite.sh yolo <worktree-path> [message]   → Verify + merge in one shot
 #   forge-lite.sh cleanup <worktree-path>          → Remove worktree without merging
 #   forge-lite.sh recover                          → Recover from a previous crash
+#
+# Exit code 2 = file overlap with busy slot (caller should wait and retry)
 #
 # Exit codes: 0 = success, 1 = failure (details on stderr)
 
@@ -94,6 +96,35 @@ is_persistent_slot() {
     [ "$base" = "${project}-forge-${i}" ] && return 0
   done
   return 1
+}
+
+# ============================================================
+# File overlap detection
+# ============================================================
+
+check_file_overlap() {
+  local my_files="${1:?}"
+  local base_dir="$MAIN_DIR/../$(basename "$MAIN_DIR")-forge"
+
+  for i in $(seq 1 $FORGE_SLOTS); do
+    local slot="${base_dir}-${i}"
+    [ -f "$slot/.forge-files" ] || continue
+    [ -f "$slot/.forge-in-use" ] || continue
+
+    local busy_branch
+    busy_branch=$(cat "$slot/.forge-in-use" 2>/dev/null)
+
+    # Check each declared file against the busy slot's file list
+    local my_file
+    for my_file in $(echo "$my_files" | tr ',' '\n'); do
+      [ -z "$my_file" ] && continue
+      if grep -qxF "$my_file" "$slot/.forge-files" 2>/dev/null; then
+        echo "[overlap] File '$my_file' conflicts with slot $i ($busy_branch)" >&2
+        echo "$my_file"
+        return 0
+      fi
+    done
+  done
 }
 
 # ============================================================
@@ -259,8 +290,28 @@ detect_commands() {
 # ============================================================
 
 cmd_create() {
-  local task_name="${1:?Usage: forge-lite.sh create <task-name>}"
+  local task_name="${1:?Usage: forge-lite.sh create <task-name> [--files \"a.ts,b.ts\"]}"
   task_name=$(echo "$task_name" | tr ' ' '-' | tr -cd '[:alnum:]-_' | tr '[:upper:]' '[:lower:]')
+  shift
+
+  # Parse --files option
+  local declared_files=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --files) declared_files="${2:-}"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+
+  # Check file overlap with busy slots (exit 2 = caller should wait)
+  if [ -n "$declared_files" ]; then
+    local overlap
+    overlap=$(check_file_overlap "$declared_files")
+    if [ -n "$overlap" ]; then
+      echo "[create] BLOCKED: file overlap detected — wait for conflicting slot to finish" >&2
+      exit 2
+    fi
+  fi
 
   auto_prune
 
@@ -318,6 +369,13 @@ cmd_create() {
 
   # Mark as in use
   echo "$branch" > "$worktree_dir/.forge-in-use"
+
+  # Save declared files for overlap detection
+  if [ -n "$declared_files" ]; then
+    echo "$declared_files" | tr ',' '\n' > "$worktree_dir/.forge-files"
+  else
+    rm -f "$worktree_dir/.forge-files"
+  fi
 
   clear_state
   echo "$worktree_dir"
@@ -434,7 +492,7 @@ cmd_merge() {
   # Keep persistent slot worktrees for reuse, delete dedicated ones
   if is_persistent_slot "$worktree"; then
     echo "[merge] Keeping slot for reuse (node_modules cached)" >&2
-    rm -f "$worktree/.forge-in-use"
+    rm -f "$worktree/.forge-in-use" "$worktree/.forge-files"
     git -C "$worktree" checkout --detach HEAD 2>/dev/null || true
     git -C "$MAIN_DIR" branch -d "$branch" 2>/dev/null || true
   else
@@ -461,7 +519,7 @@ cmd_cleanup() {
 
   local branch
   branch=$(git -C "$worktree" rev-parse --abbrev-ref HEAD 2>/dev/null) || branch=""
-  rm -f "$worktree/.forge-in-use"
+  rm -f "$worktree/.forge-in-use" "$worktree/.forge-files"
 
   # Persistent slots: release but preserve (keep cached node_modules)
   if is_persistent_slot "$worktree"; then
