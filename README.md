@@ -201,12 +201,6 @@ Classification adapts during execution — if a subagent task completes easily, 
 
 ## Configuration
 
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AGENT_URL` | `http://localhost:3001` | Auto-commit agent endpoint (optional). If set, forge pauses the agent before merge and resumes after. |
-
 ### Conventions
 
 - **`[forge]`** prefix on merge commits — identifies planned merges
