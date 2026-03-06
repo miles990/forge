@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
-# forge-lite.sh — Lightweight worktree isolation for AI agent delegations
-# Mechanical steps only. Creative work is done by the LLM between commands.
+# forge-lite.sh — Crash-proof worktree isolation for AI agent subprocesses
+#
+# Problem: AI agents that spawn subprocesses to write code (delegations/tentacles)
+# need git worktree isolation, but unattended subprocesses crash, leave stale
+# worktrees, corrupt node_modules with symlink loops, and conflict when running
+# in parallel. Nobody is watching to clean up.
+#
+# Solution: A single script that handles the mechanical git plumbing safely —
+# lock file prevents parallel conflicts, state file enables crash recovery,
+# auto-prune cleans up stale worktrees, and deps are installed before verify
+# to prevent pnpm symlink corruption.
 #
 # Usage:
 #   forge-lite.sh create <task-name>              → Create worktree + branch
