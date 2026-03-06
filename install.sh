@@ -29,13 +29,21 @@ detect_and_install() {
 
   # Claude Code — requires official plugin commands, not file copy
   if command -v claude &>/dev/null; then
-    echo "[claude-code] Detected. Registering marketplace and installing plugin..."
-    claude marketplace:add "github:$REPO" 2>/dev/null || true
-    if claude plugin:add forge 2>/dev/null; then
-      echo "  Installed via claude plugin:add"
-      echo "  Use: /forge path/to/plan.md"
+    echo "[claude-code] Detected."
+    if claude --help 2>&1 | grep -q "plugin"; then
+      echo "  Plugin system available. Installing..."
+      claude marketplace:add "github:$REPO" 2>/dev/null || true
+      if claude plugin:add forge 2>/dev/null; then
+        echo "  Installed via claude plugin:add"
+        echo "  Use: /forge path/to/plan.md"
+      else
+        echo "  Auto-install failed. Run manually:"
+        echo "    claude marketplace:add github:$REPO"
+        echo "    claude plugin:add forge"
+      fi
     else
-      echo "  Auto-install failed. Run manually:"
+      echo "  Plugin commands not available in this Claude Code version."
+      echo "  Install manually when available:"
       echo "    claude marketplace:add github:$REPO"
       echo "    claude plugin:add forge"
     fi
@@ -49,8 +57,8 @@ detect_and_install() {
     installed=1
   fi
 
-  # Cursor
-  if [ -d ".cursor" ] || [ -d "$HOME/.cursor" ]; then
+  # Cursor (only if current project uses Cursor)
+  if [ -d ".cursor" ]; then
     install_to ".cursor/rules" "forge.md"
     echo "  Use: 'Follow the forge workflow in .cursor/rules/forge.md to execute plan.md'"
     installed=1
@@ -90,7 +98,7 @@ main() {
   echo ""
   echo "Downloading SKILL.md..."
   fetch_skill
-  echo "Detecting platforms..."
+  echo "Detecting platforms (installing to all detected)..."
   echo ""
   detect_and_install
   echo ""

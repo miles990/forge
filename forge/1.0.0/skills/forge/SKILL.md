@@ -44,6 +44,8 @@ What yolo mode removes: the classification table confirmation step. Forge decide
 
 Detection: argument ends with `.md` and file exists → Execute mode. Otherwise → Plan mode.
 
+> **Edge case:** If argument ends with `.md` but file doesn't exist, warn: "file.md not found. Treating as natural language description. Did you mean to create this file first?" Then proceed as Plan mode.
+
 ```
 Input (plan file OR natural language description)
   |
@@ -89,9 +91,9 @@ Parse the user's description. Identify:
 - **Scope** — is this a single-file change or cross-cutting?
 - **Constraints** — any specific requirements mentioned?
 
-### Step 2: Sense the codebase
+### Step 2: Sense the codebase (for plan quality)
 
-Before writing the plan, understand the project:
+Before writing the plan, understand the project. This sensing is about understanding the codebase to write a good plan. Phase 0 re-senses later for execution mechanics (build/test commands, agents, worktrees).
 
 ```
 1. Read project config        → package.json, CLAUDE.md, README, etc.
@@ -131,6 +133,11 @@ Write a structured plan with tasks. Each task should specify:
 # Save to docs/plans/ with timestamp
 PLAN_FILE="docs/plans/$(date +%Y-%m-%d)-<feature-name>.md"
 mkdir -p docs/plans
+
+# If file already exists, warn before overwriting
+if [ -f "$PLAN_FILE" ]; then
+  echo "Plan file $PLAN_FILE already exists. Overwrite? (y/n)"
+fi
 ```
 
 **Normal mode:** Present the generated plan to user. Wait for approval or edits before proceeding.
@@ -293,6 +300,14 @@ FEATURE_NAME=$(basename "$PLAN_FILE" .md)
 BRANCH="feature/$FEATURE_NAME"
 WORKTREE_DIR="../$(basename $PWD)-forge-$FEATURE_NAME"
 # Unique per plan — avoids collision when multiple forge runs or users
+
+# If worktree for this plan already exists, abort — don't silently overwrite
+if [ -d "$WORKTREE_DIR" ]; then
+  echo "Worktree $WORKTREE_DIR already exists. Previous forge run for this plan?"
+  echo "Clean up first: git worktree remove $WORKTREE_DIR"
+  exit 1
+fi
+
 git worktree add "$WORKTREE_DIR" -b "$BRANCH"
 # All work happens in the worktree from here
 ```
@@ -486,14 +501,14 @@ git push origin main
 
 - **`[forge]`** prefix on merge commits — identifies planned merges (agents/CI can filter)
 - **`feature/<plan-filename>`** branch naming — traceable to source plan
-- **`../<project>-dev`** worktree location — sibling directory, predictable
+- **`../<project>-forge-<plan-name>`** worktree location — unique per plan, sibling directory, avoids collision
 - **`$AGENT_URL`** env var — override default agent endpoint
 
 ## Red Flags
 
 - **Never skip isolation for multi-task plans** — worktree is cheap, debugging race conditions is not
 - **Never merge without passing verification** — evidence before claims
-- **Never skip the classification table** — user must see and confirm
+- **Never skip the classification table** — always generate and log (yolo mode logs without confirmation)
 - **Never resume agents before merge is verified** — agents trigger on partial state
 - **Never force-push feature branches** — worktree refs can break
 - **Never hardcode verification commands** — detect from project config
@@ -566,7 +581,7 @@ Execution order:
   Level 1: #3 (Subagent, needs #1)
   Level 2: #6 (Direct, needs #1 + #3)
 
-Creating worktree: ../project-dev (feature/context-optimization)
+Creating worktree: ../project-forge-context-optimization (feature/context-optimization)
 
 Proceed? (y/n)
 ```
